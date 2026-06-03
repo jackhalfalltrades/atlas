@@ -174,9 +174,9 @@ public class NotificationHookConsumerTest {
         NotificationHookConsumer.Timer timer = mock(NotificationHookConsumer.Timer.class);
 
         when(serviceState.getState())
-                .thenReturn(ServiceState.ServiceStateValue.PASSIVE)
-                .thenReturn(ServiceState.ServiceStateValue.PASSIVE)
-                .thenReturn(ServiceState.ServiceStateValue.PASSIVE)
+                .thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE)
+                .thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE)
+                .thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE)
                 .thenReturn(ServiceState.ServiceStateValue.ACTIVE);
 
         assertTrue(hookConsumer.serverAvailable(timer));
@@ -222,7 +222,7 @@ public class NotificationHookConsumerTest {
         NotificationHookConsumer.Timer timer = mock(NotificationHookConsumer.Timer.class);
 
         doThrow(new InterruptedException()).when(timer).sleep(NotificationHookConsumer.SERVER_READY_WAIT_TIME_MS);
-        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.PASSIVE);
+        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE);
 
         assertFalse(hookConsumer.serverAvailable(timer));
     }
@@ -284,7 +284,7 @@ public class NotificationHookConsumerTest {
     }
 
     @Test
-    public void testConsumersAreStoppedWhenInstanceBecomesPassive() throws Exception {
+    public void testConsumersAreStoppedOnStop() throws Exception {
         List<NotificationConsumer<Object>> consumers = new ArrayList();
         NotificationConsumer notificationConsumerMock = mock(NotificationConsumer.class);
 
@@ -307,7 +307,7 @@ public class NotificationHookConsumerTest {
         }).when(executorService).submit(any(NotificationHookConsumer.HookConsumer.class));
 
         notificationHookConsumer.startInternal(configuration, executorService);
-        notificationHookConsumer.instanceIsPassive();
+        notificationHookConsumer.stop();
 
         verify(notificationInterface).close();
         verify(executorService).shutdown();
@@ -328,7 +328,7 @@ public class NotificationHookConsumerTest {
         final NotificationHookConsumer notificationHookConsumer = new NotificationHookConsumer(notificationInterface, atlasEntityStore, serviceState, instanceConverter, typeRegistry, metricsUtil, null, asyncImporter);
 
         notificationHookConsumer.startInternal(configuration, executorService);
-        notificationHookConsumer.instanceIsPassive();
+        notificationHookConsumer.stop();
 
         verify(notificationInterface).close();
         verify(executorService).shutdown();
@@ -1386,7 +1386,7 @@ public class NotificationHookConsumerTest {
         serverAvailableMethod.setAccessible(true);
 
         // Mock service state to never become active
-        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.PASSIVE);
+        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE);
 
         NotificationHookConsumer.Timer mockTimer = mock(NotificationHookConsumer.Timer.class);
 
@@ -2096,7 +2096,7 @@ public class NotificationHookConsumerTest {
 
         // Mock serviceState to simulate server not ready, then ready
         when(serviceState.getState())
-                .thenReturn(ServiceState.ServiceStateValue.PASSIVE)
+                .thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE)
                 .thenReturn(ServiceState.ServiceStateValue.ACTIVE);
 
         // Mock consumer to return no messages

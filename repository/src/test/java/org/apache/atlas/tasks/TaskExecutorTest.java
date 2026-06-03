@@ -114,6 +114,51 @@ public class TaskExecutorTest extends BaseTaskFixture {
         assertTaskUntilFail(errorThrowingTask, taskExecutor);
     }
 
+    @Test
+    public void taskConsumer_skipsExecution_whenClaimReturnsFalse() throws InterruptedException {
+        // Simulate another node already claimed the task (claimAction returns false).
+        TaskManagement.Statistics statistics = new TaskManagement.Statistics();
+        Map<String, TaskFactory> factoryMap = new HashMap<>();
+
+        AtlasTask task = new AtlasTask("add", "test", Collections.emptyMap());
+
+        // GraphClaimable that always returns false (another node won)
+        GraphClaimable<Boolean> alreadyClaimed = () -> false;
+
+        TaskExecutor.TaskConsumer consumer = new TaskExecutor.TaskConsumer(
+                task, alreadyClaimed, taskRegistry, factoryMap, statistics);
+
+        consumer.run();
+
+        // No work should have been counted — task was skipped
+        assertEquals(statistics.getTotal(), 0,
+                "Statistics must stay at 0 when claim returns false");
+    }
+
+    @Test
+    public void taskConsumer_executesTask_whenClaimReturnsTrue() throws Exception {
+        TaskManagementTest.SpyingFactory spyingFactory = new TaskManagementTest.SpyingFactory();
+        Map<String, TaskFactory> taskFactoryMap = new HashMap<>();
+        TaskManagement.createTaskTypeFactoryMap(taskFactoryMap, spyingFactory);
+
+        AtlasTask addTask = taskManagement.createTask("add", "test", Collections.emptyMap());
+        graph.commit();
+
+        TaskManagement.Statistics statistics = new TaskManagement.Statistics();
+
+        // Claim always succeeds — simulates this node winning the CAS
+        GraphClaimable<Boolean> winningClaim = () -> true;
+
+        TaskExecutor.TaskConsumer consumer = new TaskExecutor.TaskConsumer(
+                addTask, winningClaim, taskRegistry, taskFactoryMap, statistics);
+
+        consumer.run();
+
+        Thread.sleep(200);
+        assertEquals(statistics.getTotalSuccess(), 1,
+                "Task must execute and succeed when claim returns true");
+    }
+
     private void assertTaskUntilFail(AtlasTask errorThrowingTask, TaskExecutor taskExecutor) throws AtlasBaseException, InterruptedException {
         AtlasTask errorTaskFromDB = taskManagement.getByGuid(errorThrowingTask.getGuid());
 

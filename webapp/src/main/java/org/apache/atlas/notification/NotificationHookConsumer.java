@@ -25,6 +25,7 @@ import org.apache.atlas.AtlasClientV2;
 import org.apache.atlas.AtlasConfiguration;
 import org.apache.atlas.AtlasErrorCode;
 import org.apache.atlas.AtlasException;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.RequestContext;
 import org.apache.atlas.exception.AtlasBaseException;
 import org.apache.atlas.ha.HAConfiguration;
@@ -385,7 +386,7 @@ public class NotificationHookConsumer implements Service, ActiveStateChangeHandl
 
     @Override
     public void start() throws AtlasException {
-        startInternal(applicationProperties, null);
+        // activation is handled exclusively by instanceIsActive()
     }
 
     @Override
@@ -421,35 +422,25 @@ public class NotificationHookConsumer implements Service, ActiveStateChangeHandl
      */
     @Override
     public void instanceIsActive() {
+        // Hook consumers run only on MONOLITHIC and NOTIFICATION_PROCESSOR.
+        // METADATA_SERVER does not consume hook messages — it produces them and serves REST.
+        // INITIALIZER exits after init and never needs long-running consumers.
+        if (!AtlasRunMode.current().runsNotificationProcessing()) {
+            LOG.info("NotificationHookConsumer.instanceIsActive(): RUN_MODE={} — skipping hook Kafka consumers",
+                    AtlasRunMode.current());
+            return;
+        }
+
         if (executors == null) {
             executors = createExecutor();
-            LOG.info("Executors initialized (Instance is active)");
         }
 
         if (consumerDisabled) {
             return;
         }
 
-        LOG.info("Reacting to active state: initializing Kafka consumers");
-
+        LOG.info("NotificationHookConsumer.instanceIsActive(): starting Kafka consumers");
         startHookConsumers();
-    }
-
-    /**
-     * Stop Kafka consumer threads that read from Kafka topic when server is de-activated.
-     * <p>
-     * Since the consumers create / update entities to the shared backend store, only the active instance
-     * should perform this activity. Hence, these threads are stopped only on server deactivation.
-     */
-    @Override
-    public void instanceIsPassive() {
-        if (consumerDisabled && consumers.isEmpty()) {
-            return;
-        }
-
-        LOG.info("Reacting to passive state: shutting down Kafka consumers.");
-
-        stop();
     }
 
     @Override

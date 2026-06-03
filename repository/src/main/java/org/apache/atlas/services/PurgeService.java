@@ -20,6 +20,7 @@ package org.apache.atlas.services;
 
 import org.apache.atlas.ApplicationProperties;
 import org.apache.atlas.AtlasException;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.DeleteType;
 import org.apache.atlas.RequestContext;
 import org.apache.atlas.annotation.AtlasService;
@@ -119,6 +120,14 @@ public class PurgeService implements Service {
 
     @Override
     public void start() throws AtlasException {
+        // PurgeService is a metadata-plane operation — runs only on MONOLITHIC and
+        // METADATA_SERVER nodes.  NOTIFICATION_PROCESSOR handles hook messages only;
+        // INITIALIZER exits after init.  No purge work on either.
+        if (!AtlasRunMode.current().runsMetadataServer()) {
+            LOG.info("PurgeService.start(): RUN_MODE={} — skipping purge service",
+                    AtlasRunMode.current());
+            return;
+        }
         if (!getSoftDeletionFlag()) {
             LOG.info("==> cleanup not enabled");
             return;

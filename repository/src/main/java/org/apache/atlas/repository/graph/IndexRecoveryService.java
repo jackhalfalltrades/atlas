@@ -21,7 +21,7 @@ import com.google.common.annotations.VisibleForTesting;
 import org.apache.atlas.ApplicationProperties;
 import org.apache.atlas.AtlasConfiguration;
 import org.apache.atlas.AtlasException;
-import org.apache.atlas.ha.HAConfiguration;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.listener.ActiveStateChangeHandler;
 import org.apache.atlas.repository.graphdb.AtlasGraph;
 import org.apache.atlas.repository.graphdb.AtlasGraphManagement;
@@ -87,13 +87,7 @@ public class IndexRecoveryService implements Service, ActiveStateChangeHandler {
 
     @Override
     public void start() throws AtlasException {
-        if (configuration == null || !HAConfiguration.isHAEnabled(configuration)) {
-            LOG.info("==> IndexRecoveryService.start()");
-
-            startTxLogMonitoring();
-
-            LOG.info("<== IndexRecoveryService.start()");
-        }
+        // activation is handled exclusively by instanceIsActive()
     }
 
     @Override
@@ -111,18 +105,18 @@ public class IndexRecoveryService implements Service, ActiveStateChangeHandler {
     public void instanceIsActive() throws AtlasException {
         LOG.info("==> IndexRecoveryService.instanceIsActive()");
 
+        // Index recovery monitors Solr health and replays missed index updates.
+        // Only relevant on nodes that serve search queries (MONOLITHIC, METADATA_SERVER).
+        // NOTIFICATION_PROCESSOR does not use Solr search and INITIALIZER exits after init.
+        if (!AtlasRunMode.current().runsMetadataServer()) {
+            LOG.info("IndexRecoveryService.instanceIsActive(): RUN_MODE={} — skipping index recovery monitor",
+                    AtlasRunMode.current());
+            return;
+        }
+
         startTxLogMonitoring();
 
         LOG.info("<== IndexRecoveryService.instanceIsActive()");
-    }
-
-    @Override
-    public void instanceIsPassive() throws AtlasException {
-        LOG.info("==> IndexRecoveryService.instanceIsPassive()");
-
-        stop();
-
-        LOG.info("<== IndexRecoveryService.instanceIsPassive()");
     }
 
     @Override

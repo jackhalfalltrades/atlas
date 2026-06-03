@@ -135,6 +135,50 @@ public class TaskRegistry {
         }
     }
 
+    /**
+     * Atomically claims a task for execution on this node by transitioning its status
+     * from {@code PENDING} to {@code IN_PROGRESS} inside a single graph transaction.
+     *
+     * <p>In an active-active cluster every node calls {@code queuePendingTasks()} on startup
+     * and may also receive task dispatch calls at runtime.  Without a claim step, multiple
+     * nodes would execute the same task concurrently.  This method provides the
+     * Compare-And-Swap (CAS) guard:
+     * <ul>
+     *   <li>The first node whose transaction commits wins the claim and must execute the task.</li>
+     *   <li>Any other node that concurrently attempts the same CAS gets a JanusGraph
+     *       {@code PermanentLockingException}. The {@link GraphTransactionInterceptor} retries,
+     *       but on retry the vertex status is already {@code IN_PROGRESS} (or {@code COMPLETE}),
+     *       so the query returns no results and the method returns {@code false}.</li>
+     * </ul>
+     *
+     * @param taskGuid the GUID of the task to claim
+     * @return {@code true} if this node successfully claimed the task; {@code false} if the
+     *         task was not found, was not in {@code PENDING} state, or was already claimed
+     *         by another node
+     */
+    @GraphTransaction
+    public boolean tryClaimTask(String taskGuid) {
+        AtlasGraphQuery query = graph.query()
+                .has(Constants.TASK_TYPE_PROPERTY_KEY, Constants.TASK_TYPE_NAME)
+                .has(Constants.TASK_GUID, taskGuid)
+                .has(Constants.TASK_STATUS, AtlasTask.Status.PENDING.toString());
+
+        Iterator<AtlasVertex> results = query.vertices().iterator();
+
+        if (!results.hasNext()) {
+            // Task not found or not PENDING — already claimed or completed by another node.
+            return false;
+        }
+
+        AtlasVertex taskVertex = results.next();
+
+        setEncodedProperty(taskVertex, Constants.TASK_STATUS, AtlasTask.Status.IN_PROGRESS.toString());
+        setEncodedProperty(taskVertex, Constants.TASK_UPDATED_TIME, System.currentTimeMillis());
+
+        LOG.debug("TaskRegistry.tryClaimTask({}): claimed IN_PROGRESS", taskGuid);
+        return true;
+    }
+
     @GraphTransaction
     public void deleteComplete(AtlasVertex taskVertex, AtlasTask task) {
         updateStatus(taskVertex, task);

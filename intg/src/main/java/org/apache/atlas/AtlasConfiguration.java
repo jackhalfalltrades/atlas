@@ -115,7 +115,19 @@ public enum AtlasConfiguration {
     ATLAS_ASYNC_IMPORT_MIN_DURATION_OVERRIDE_TEST_AUTOMATION("atlas.async.import.min.duration.override.test.automation", false),
     ASYNC_IMPORT_TOPIC_PREFIX("atlas.async.import.topic.prefix", "ATLAS_IMPORT_"),
     ASYNC_IMPORT_REQUEST_ID_PREFIX("atlas.async.import.request_id.prefix", "async_import_"),
-    REPLACE_HUGE_SPARK_PROCESS_ATTRIBUTES_PATCH("atlas.process.spark.attributes.update.patch", false);
+    REPLACE_HUGE_SPARK_PROCESS_ATTRIBUTES_PATCH("atlas.process.spark.attributes.update.patch", false),
+    /**
+     * Maximum number of times the {GraphTransactionInterceptor} will
+     * retry a failed outer transaction when JanusGraph reports a locking conflict
+     * ({@code PermanentLockingException} / {@code TemporaryLockingException}).
+     * Set to 0 to disable retries entirely.
+     */
+    GRAPH_TXN_MAX_RETRIES("atlas.graph.transaction.max.retries", 5),
+    /**
+     * Base back-off in milliseconds between transaction retry attempts.
+     * Each successive attempt waits {@code attempt * backoff} ms before retrying.
+     */
+    GRAPH_TXN_RETRY_BACKOFF_MS("atlas.graph.transaction.retry.backoff.ms", 1000);
     private static final Configuration APPLICATION_PROPERTIES;
 
     private final String propertyName;

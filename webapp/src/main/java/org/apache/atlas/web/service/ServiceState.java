@@ -20,40 +20,37 @@ package org.apache.atlas.web.service;
 
 import org.apache.atlas.ApplicationProperties;
 import org.apache.atlas.AtlasException;
-import org.apache.atlas.RequestContext;
-import org.apache.atlas.exception.AtlasBaseException;
-import org.apache.atlas.ha.HAConfiguration;
-import org.apache.atlas.model.audit.AtlasAuditEntry;
-import org.apache.atlas.repository.audit.AtlasAuditService;
 import org.apache.commons.configuration2.Configuration;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import javax.inject.Inject;
 import javax.inject.Singleton;
 
-import java.util.Date;
-
-import static com.google.common.base.Preconditions.checkState;
 import static org.apache.atlas.AtlasConstants.ATLAS_MIGRATION_MODE_FILENAME;
 
 /**
- * A class that maintains the state of this instance.
+ * Tracks the lifecycle state of this Atlas node.
  *
- * The states are maintained at a granular level, including in-transition states. The transitions are
- * directed by {@link ActiveInstanceElectorService}.
+ * <p>In active-active peer mode the only runtime states are:
+ * <ul>
+ *   <li>{@link ServiceStateValue#BECOMING_ACTIVE} — node is starting up, not yet ready</li>
+ *   <li>{@link ServiceStateValue#ACTIVE}          — node is fully active and serving requests</li>
+ *   <li>{@link ServiceStateValue#MIGRATING}       — node is running a data migration</li>
+ * </ul>
+ *
+ * <p>There are no leader, follower, or passive states.
+ * Transitions are directed by {@code AtlasActivationService}.
+ *
+ * <p>This bean is a {@code @Component} injected directly wherever service-state
+ * checks are needed (e.g. {@code ActiveServerFilter}, {@code AtlasSecurityConfig}).
  */
 @Singleton
 @Component
 public class ServiceState {
     private static final Logger LOG = LoggerFactory.getLogger(ServiceState.class);
-
-    @Autowired
-    AtlasAuditService auditService;
-
-    private final Configuration configuration;
 
     private volatile ServiceStateValue state;
 
@@ -61,13 +58,14 @@ public class ServiceState {
         this(ApplicationProperties.get());
     }
 
+    @Inject
     public ServiceState(Configuration configuration) {
-        this.configuration = configuration;
-
-        state = !HAConfiguration.isHAEnabled(configuration) ? ServiceStateValue.ACTIVE : ServiceStateValue.PASSIVE;
-
         if (!StringUtils.isEmpty(configuration.getString(ATLAS_MIGRATION_MODE_FILENAME, ""))) {
             state = ServiceStateValue.MIGRATING;
+            LOG.info("ServiceState: migration mode detected — initial state is MIGRATING");
+        } else {
+            state = ServiceStateValue.BECOMING_ACTIVE;
+            LOG.info("ServiceState: initial state is BECOMING_ACTIVE");
         }
     }
 
@@ -75,75 +73,47 @@ public class ServiceState {
         return state;
     }
 
-    private void setState(ServiceStateValue newState) {
-        checkState(HAConfiguration.isHAEnabled(configuration), "Cannot change state as requested, as HA is not enabled for this instance.");
-
-        state = newState;
-
-        auditServerStatus();
-    }
-
     public void becomingActive() {
-        LOG.warn("Instance becoming active from {}", state);
-
-        setState(ServiceStateValue.BECOMING_ACTIVE);
+        LOG.info("ServiceState: transitioning to BECOMING_ACTIVE from {}", state);
+        state = ServiceStateValue.BECOMING_ACTIVE;
     }
 
     public void setActive() {
-        LOG.warn("Instance is active from {}", state);
-
-        setState(ServiceStateValue.ACTIVE);
-    }
-
-    public void becomingPassive() {
-        LOG.warn("Instance becoming passive from {}", state);
-
-        setState(ServiceStateValue.BECOMING_PASSIVE);
-    }
-
-    public void setPassive() {
-        LOG.warn("Instance is passive from {}", state);
-
-        setState(ServiceStateValue.PASSIVE);
-    }
-
-    public boolean isInstanceInTransition() {
-        ServiceStateValue state = getState();
-
-        return state == ServiceStateValue.BECOMING_ACTIVE || state == ServiceStateValue.BECOMING_PASSIVE;
+        LOG.info("ServiceState: transitioning to ACTIVE from {}", state);
+        state = ServiceStateValue.ACTIVE;
     }
 
     public void setMigration() {
-        LOG.warn("Instance in {}", state);
+        LOG.info("ServiceState: transitioning to MIGRATING from {}", state);
+        state = ServiceStateValue.MIGRATING;
+    }
 
-        setState(ServiceStateValue.MIGRATING);
+    public boolean isInstanceActive() {
+        return state == ServiceStateValue.ACTIVE;
+    }
+
+    public boolean isInstanceInTransition() {
+        return state == ServiceStateValue.BECOMING_ACTIVE;
     }
 
     public boolean isInstanceInMigration() {
-        return getState() == ServiceStateValue.MIGRATING;
+        return state == ServiceStateValue.MIGRATING;
     }
 
-    private void auditServerStatus() {
-        if (state == ServiceState.ServiceStateValue.ACTIVE) {
-            Date date = new Date();
+    public boolean isActive() {
+        return isInstanceActive();
+    }
 
-            try {
-                auditService.add(AtlasAuditEntry.AuditOperation.SERVER_START, EmbeddedServer.SERVER_START_TIME, date, null, null, 0);
-                auditService.add(AtlasAuditEntry.AuditOperation.SERVER_STATE_ACTIVE, date, date, null, null, 0);
-            } catch (AtlasBaseException e) {
-                LOG.error("Exception occurred during audit", e);
-            } finally {
-                // In HA environment, after the server related audits are added, the request created are now cleared.
-                RequestContext.clear();
-            }
-        }
+    public String getStateName() {
+        return state.toString();
     }
 
     public enum ServiceStateValue {
-        ACTIVE,
-        PASSIVE,
+        /** Node is starting up — activation handlers are being called. */
         BECOMING_ACTIVE,
-        BECOMING_PASSIVE,
+        /** Node is fully active and serving requests. */
+        ACTIVE,
+        /** Node is running a data migration. */
         MIGRATING
     }
 }

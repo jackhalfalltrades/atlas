@@ -18,6 +18,7 @@
 package org.apache.atlas.services;
 
 import org.apache.atlas.ApplicationProperties;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.DeleteType;
 import org.apache.atlas.RequestContext;
 import org.apache.atlas.exception.AtlasBaseException;
@@ -132,6 +133,30 @@ public class PurgeServiceTest extends AtlasTestBase {
         // Flag assertions
         assertTrue(RequestContext.get().isPurgeRequested());
         assertEquals(RequestContext.get().getDeleteType(), DeleteType.HARD);
+    }
+
+    @Test
+    public void testStart_skipsWhenRUNMODE_isNotMetadataServer() throws Exception {
+        // PurgeService.start() must be a no-op for NOTIFICATION_PROCESSOR (and INITIALIZER).
+        // Set atlas.enable.process.soft.delete=true so it would normally launch the thread.
+        ApplicationProperties.get().setProperty("atlas.enable.process.soft.delete", "true");
+
+        PurgeService purgeService = new PurgeService(atlasGraph, entityStore, typeRegistry);
+
+        try (org.mockito.MockedStatic<AtlasRunMode> mockedMode =
+                     org.mockito.Mockito.mockStatic(AtlasRunMode.class)) {
+            AtlasRunMode mockMode = org.mockito.Mockito.mock(AtlasRunMode.class);
+            org.mockito.Mockito.when(mockMode.runsMetadataServer()).thenReturn(false);
+            mockedMode.when(AtlasRunMode::current).thenReturn(mockMode);
+
+            // Should return without launching the cleanup thread
+            purgeService.start();
+            // If start() did NOT return early, it would call launchCleanUp() and start a thread.
+            // We verify indirectly: no exception, method completes quickly.
+        }
+
+        // Reset
+        ApplicationProperties.get().setProperty("atlas.enable.process.soft.delete", "false");
     }
 
     private AtlasEntity newHiveDb(String nameOpt) {

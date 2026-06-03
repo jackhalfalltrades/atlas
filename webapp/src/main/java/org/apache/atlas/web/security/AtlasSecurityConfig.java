@@ -26,7 +26,6 @@ import org.apache.atlas.web.filters.AtlasKnoxSSOAuthenticationFilter;
 import org.apache.atlas.web.filters.HeadersUtil;
 import org.apache.atlas.web.filters.StaleTransactionCleanupFilter;
 import org.apache.commons.configuration2.Configuration;
-import org.apache.commons.lang3.StringUtils;
 import org.keycloak.adapters.AdapterDeploymentContext;
 import org.keycloak.adapters.KeycloakConfigResolver;
 import org.keycloak.adapters.KeycloakDeployment;
@@ -79,7 +78,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.atlas.AtlasConstants.ATLAS_MIGRATION_MODE_FILENAME;
 import static org.apache.atlas.web.filters.HeadersUtil.SERVER_KEY;
 
 @EnableWebSecurity
@@ -226,17 +224,12 @@ public class AtlasSecurityConfig extends WebSecurityConfigurerAdapter {
 
         //@formatter:on
 
-        boolean configMigrationEnabled = !StringUtils.isEmpty(configuration.getString(ATLAS_MIGRATION_MODE_FILENAME));
-
-        if (configuration.getBoolean("atlas.server.ha.enabled", false) || configMigrationEnabled) {
-            if (configMigrationEnabled) {
-                LOG.info("Atlas is in Migration Mode, enabling ActiveServerFilter");
-            } else {
-                LOG.info("Atlas is in HA Mode, enabling ActiveServerFilter");
-            }
-
-            httpSecurity.addFilterAfter(activeServerFilter, BasicAuthenticationFilter.class);
-        }
+        // ActiveServerFilter is always registered in active-active mode:
+        // it returns 503 while the node is BECOMING_ACTIVE (starting up), gating
+        // load-balancer traffic until instanceIsActive() has completed.
+        // It also handles migration-mode redirects.
+        LOG.info("Registering ActiveServerFilter (active-active peer mode)");
+        httpSecurity.addFilterAfter(activeServerFilter, BasicAuthenticationFilter.class);
 
         httpSecurity.addFilterAfter(staleTransactionCleanupFilter, BasicAuthenticationFilter.class)
                 .addFilterBefore(ssoAuthenticationFilter, BasicAuthenticationFilter.class)

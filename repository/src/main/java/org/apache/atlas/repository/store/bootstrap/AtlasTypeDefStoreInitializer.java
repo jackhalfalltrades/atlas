@@ -21,11 +21,10 @@ import com.fasterxml.jackson.annotation.JsonAutoDetect;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import org.apache.atlas.AtlasErrorCode;
-import org.apache.atlas.AtlasException;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.RequestContext;
 import org.apache.atlas.authorize.AtlasAuthorizerFactory;
 import org.apache.atlas.exception.AtlasBaseException;
-import org.apache.atlas.ha.HAConfiguration;
 import org.apache.atlas.listener.ActiveStateChangeHandler;
 import org.apache.atlas.model.TypeCategory;
 import org.apache.atlas.model.patches.AtlasPatch.PatchStatus;
@@ -272,31 +271,54 @@ public class AtlasTypeDefStoreInitializer implements ActiveStateChangeHandler {
 
     @PostConstruct
     public void init() {
-        LOG.info("==> AtlasTypeDefStoreInitializer.init()");
-
-        if (!HAConfiguration.isHAEnabled(conf)) {
-            startInternal();
-        } else {
-            LOG.info("AtlasTypeDefStoreInitializer.init(): deferring type loading until instance activation");
-        }
+        // type loading is deferred entirely to instanceIsActive() for guaranteed ordering
 
         LOG.info("<== AtlasTypeDefStoreInitializer.init()");
     }
 
+    /**
+     * Called when this node wins leader election (or is the sole active node in legacy HA).
+     * Guarded by {@link #initialized} so bootstrap does not run twice if this node was
+     * already initialised as a follower.
+     */
     @Override
     public void instanceIsActive() {
         LOG.info("==> AtlasTypeDefStoreInitializer.instanceIsActive()");
 
-        startInternal();
+        AtlasRunMode mode = AtlasRunMode.current();
+        if (!mode.runsInitialization()) {
+            // METADATA_SERVER and NOTIFICATION_PROCESSOR: store already initialized by INITIALIZER
+            // or MONOLITHIC node — just load types into this JVM's in-memory registry.
+            LOG.info("AtlasTypeDefStoreInitializer.instanceIsActive(): RUN_MODE={} — loading types without bootstrap", mode);
+            loadTypesOnly();
+        } else {
+            // MONOLITHIC and INITIALIZER: bootstrap type-defs and apply patches.
+            startInternal();
+        }
 
         LOG.info("<== AtlasTypeDefStoreInitializer.instanceIsActive()");
     }
 
-    @Override
-    public void instanceIsPassive() throws AtlasException {
-        LOG.info("==> AtlasTypeDefStoreInitializer.instanceIsPassive()");
-
-        LOG.info("<== AtlasTypeDefStoreInitializer.instanceIsPassive()");
+    /**
+     * Loads type definitions from the graph into the in-memory registry without
+     * running bootstrap or patch writes.  Used in {@code SERVICE_TYPE=ATLAS} mode
+     * where initialization has already been completed by a prior INITIALIZATION pod.
+     */
+    private void loadTypesOnly() {
+        try {
+            typeDefStore.init();
+            typeDefStore.notifyLoadCompletion();
+            try {
+                AtlasAuthorizerFactory.getAtlasAuthorizer();
+            } catch (Throwable t) {
+                LOG.error("AtlasTypeDefStoreInitializer.loadTypesOnly(): Unable to obtain AtlasAuthorizer", t);
+            }
+            LOG.info("AtlasTypeDefStoreInitializer.loadTypesOnly(): types loaded successfully");
+        } catch (AtlasBaseException e) {
+            LOG.error("AtlasTypeDefStoreInitializer.loadTypesOnly(): failed to load types", e);
+        } finally {
+            RequestContext.clear();
+        }
     }
 
     @Override
@@ -403,7 +425,7 @@ public class AtlasTypeDefStoreInitializer implements ActiveStateChangeHandler {
             try {
                 AtlasAuthorizerFactory.getAtlasAuthorizer();
             } catch (Throwable t) {
-                LOG.error("AtlasTypeDefStoreInitializer.instanceIsActive(): Unable to obtain AtlasAuthorizer", t);
+                LOG.error("AtlasTypeDefStoreInitializer.startInternal(): Unable to obtain AtlasAuthorizer", t);
             }
         } catch (AtlasBaseException e) {
             LOG.error("Failed to init after becoming active", e);

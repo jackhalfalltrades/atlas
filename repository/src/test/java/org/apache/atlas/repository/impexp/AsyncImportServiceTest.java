@@ -241,6 +241,118 @@ public class AsyncImportServiceTest {
         verify(dataAccess, times(1)).load(any(AtlasAsyncImportRequest.class));
     }
 
+    // =====================================================================
+// Tests for GraphClaimable integration and cache-bypass behaviour
+// Added for active-active HA: verify tryClaim, fetchStatusFromGraph,
+// loadFresh, and cache-bypass in claim and status paths.
+// =====================================================================
+
+    // ----- tryClaim -----
+
+    @Test
+    public void testTryClaim_delegatesToClaimNextWaitingImport_whenNothingWaiting() throws Exception {
+        try (MockedStatic<AtlasGraphUtilsV2> mock = Mockito.mockStatic(AtlasGraphUtilsV2.class)) {
+            // No PROCESSING, no WAITING
+            mock.when(() -> AtlasGraphUtilsV2.findEntityPropertyValuesByTypeAndAttributes(
+                    ASYNC_IMPORT_TYPE_NAME, Collections.singletonMap(PROPERTY_KEY_ASYNC_IMPORT_STATUS, PROCESSING),
+                    PROPERTY_KEY_ASYNC_IMPORT_ID)).thenReturn(Collections.emptyList());
+            mock.when(() -> AtlasGraphUtilsV2.findEntityPropertyValuesByTypeAndAttributes(
+                    ASYNC_IMPORT_TYPE_NAME, Collections.singletonMap(PROPERTY_KEY_ASYNC_IMPORT_STATUS, WAITING),
+                    PROPERTY_KEY_ASYNC_IMPORT_ID)).thenReturn(Collections.emptyList());
+
+            AtlasAsyncImportRequest result = asyncImportService.tryClaim();
+
+            org.testng.Assert.assertNull(result, "tryClaim must return null when nothing is WAITING");
+        }
+    }
+
+    // ----- fetchStatusFromGraph -----
+
+    @Test
+    public void testFetchStatusFromGraph_returnsLiveStatus() {
+        String importId = "imp-fetch-status";
+
+        try (MockedStatic<AtlasGraphUtilsV2> mock = Mockito.mockStatic(AtlasGraphUtilsV2.class)) {
+            mock.when(() -> AtlasGraphUtilsV2.findEntityPropertyValuesByTypeAndAttributes(
+                            ASYNC_IMPORT_TYPE_NAME,
+                            Collections.singletonMap(PROPERTY_KEY_ASYNC_IMPORT_ID, importId),
+                            PROPERTY_KEY_ASYNC_IMPORT_STATUS))
+                    .thenReturn(Collections.singletonList(PROCESSING.name()));
+
+            AtlasAsyncImportRequest.ImportStatus status = asyncImportService.fetchStatusFromGraph(importId);
+
+            org.testng.Assert.assertEquals(status, PROCESSING);
+        }
+    }
+
+    @Test
+    public void testFetchStatusFromGraph_returnsNull_whenNotFound() {
+        String importId = "imp-not-found";
+
+        try (MockedStatic<AtlasGraphUtilsV2> mock = Mockito.mockStatic(AtlasGraphUtilsV2.class)) {
+            mock.when(() -> AtlasGraphUtilsV2.findEntityPropertyValuesByTypeAndAttributes(
+                            ASYNC_IMPORT_TYPE_NAME,
+                            Collections.singletonMap(PROPERTY_KEY_ASYNC_IMPORT_ID, importId),
+                            PROPERTY_KEY_ASYNC_IMPORT_STATUS))
+                    .thenReturn(Collections.emptyList());
+
+            AtlasAsyncImportRequest.ImportStatus status = asyncImportService.fetchStatusFromGraph(importId);
+
+            org.testng.Assert.assertNull(status);
+        }
+    }
+
+    // ----- loadFresh -----
+
+    @Test
+    public void testLoadFresh_loadsDirectlyFromGraph_bypassingCache() throws Exception {
+        String importId = "imp-loadfresh";
+
+        // Pre-populate cache with stale WAITING status
+        AtlasAsyncImportRequest stale = new AtlasAsyncImportRequest();
+        stale.setImportId(importId);
+        stale.setStatus(WAITING);
+        asyncImportService.populateCache(stale);
+
+        // Graph has PROCESSING (updated by another node)
+        AtlasAsyncImportRequest live = new AtlasAsyncImportRequest();
+        live.setImportId(importId);
+        live.setStatus(PROCESSING);
+        Mockito.when(dataAccess.load(any(AtlasAsyncImportRequest.class))).thenReturn(live);
+
+        AtlasAsyncImportRequest result = asyncImportService.loadFresh(importId);
+
+        org.testng.Assert.assertNotNull(result);
+        org.testng.Assert.assertEquals(result.getStatus(), PROCESSING,
+                "loadFresh must return live graph value, not stale cache");
+        Mockito.verify(dataAccess, Mockito.times(1)).load(any(AtlasAsyncImportRequest.class));
+    }
+
+    // ----- getAsyncImportRequest: always bypasses cache -----
+
+    @Test
+    public void testGetAsyncImportRequest_alwaysLoadsFromGraph() throws Exception {
+        String importId = "imp-status-fresh";
+
+        // Cache has stale WAITING
+        AtlasAsyncImportRequest stale = new AtlasAsyncImportRequest();
+        stale.setImportId(importId);
+        stale.setStatus(WAITING);
+        asyncImportService.populateCache(stale);
+
+        // JanusGraph has PROCESSING
+        AtlasAsyncImportRequest live = new AtlasAsyncImportRequest();
+        live.setImportId(importId);
+        live.setStatus(PROCESSING);
+        Mockito.when(dataAccess.load(any(AtlasAsyncImportRequest.class))).thenReturn(live);
+
+        AtlasAsyncImportRequest result = asyncImportService.getAsyncImportRequest(importId);
+
+        org.testng.Assert.assertEquals(result.getStatus(), PROCESSING,
+                "Status endpoint must return live JanusGraph value, not stale cached value");
+        Mockito.verify(dataAccess, Mockito.times(1)).load(any(AtlasAsyncImportRequest.class));
+    }
+
     @AfterMethod
     public void tearDown() {
         Mockito.reset(dataAccess);

@@ -17,7 +17,6 @@
  */
 package org.apache.atlas.repository.store.bootstrap;
 
-import org.apache.atlas.AtlasException;
 import org.apache.atlas.RequestContext;
 import org.apache.atlas.exception.AtlasBaseException;
 import org.apache.atlas.ha.HAConfiguration;
@@ -187,11 +186,6 @@ public class AtlasTypeDefStoreInitializerTest {
     public void testInstanceIsActive() throws Exception {
         initializer.instanceIsActive();
         verify(typeDefStore, times(1)).init();
-    }
-
-    @Test
-    public void testInstanceIsPassive() throws AtlasException {
-        initializer.instanceIsPassive();
     }
 
     @Test

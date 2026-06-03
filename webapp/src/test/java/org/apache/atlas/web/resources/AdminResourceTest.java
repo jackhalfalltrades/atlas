@@ -212,7 +212,7 @@ public class AdminResourceTest {
 
     @Test
     public void testResourceGetsValueFromServiceState() throws IOException {
-        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.PASSIVE);
+        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE);
 
         AdminResource adminResource = new AdminResource(serviceState, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
         Response      response      = adminResource.getStatus();
@@ -221,7 +221,7 @@ public class AdminResourceTest {
 
         JsonNode entity = AtlasJson.parseToV1JsonNode((String) response.getEntity());
 
-        assertEquals(entity.get("Status").asText(), "PASSIVE");
+        assertEquals(entity.get("Status").asText(), "BECOMING_ACTIVE");
     }
 
     // Helper method to create AdminResource with all mocked dependencies
@@ -561,7 +561,7 @@ public class AdminResourceTest {
 
     @Test
     public void testServiceLivelinessWhenNotActive() {
-        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.PASSIVE);
+        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE);
 
         AdminResource adminResource = createAdminResource();
 
@@ -625,7 +625,7 @@ public class AdminResourceTest {
 
     @Test
     public void testServiceReadinessWhenServiceNotActive() {
-        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.PASSIVE);
+        when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.BECOMING_ACTIVE);
         when(atlasMetricsUtil.isIndexStoreActive()).thenReturn(true);
         when(atlasMetricsUtil.isBackendStoreActive()).thenReturn(true);
 

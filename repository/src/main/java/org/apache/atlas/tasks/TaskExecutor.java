@@ -59,7 +59,14 @@ public class TaskExecutor {
 
             TASK_LOG.log(task);
 
-            this.executorService.submit(new TaskConsumer(task, this.registry, this.taskTypeFactoryMap, this.statistics));
+            // Build a per-task GraphClaimable that atomically transitions
+            // PENDING → IN_PROGRESS for exactly this task's GUID.
+            // TaskConsumer calls claimAction.tryClaim() — not registry directly —
+            // so the claim step is abstracted behind the GraphClaimable contract.
+            final String              taskGuid    = task.getGuid();
+            GraphClaimable<Boolean>   claimAction = () -> registry.tryClaimTask(taskGuid);
+
+            this.executorService.submit(new TaskConsumer(task, claimAction, this.registry, this.taskTypeFactoryMap, this.statistics));
         }
     }
 
@@ -71,13 +78,26 @@ public class TaskExecutor {
     static class TaskConsumer implements Runnable {
         private static final int MAX_ATTEMPT_COUNT = 3;
 
+        private final GraphClaimable<Boolean>   claimAction;
         private final Map<String, TaskFactory>  taskTypeFactoryMap;
         private final TaskRegistry              registry;
         private final TaskManagement.Statistics statistics;
         private final AtlasTask                 task;
 
-        public TaskConsumer(AtlasTask task, TaskRegistry registry, Map<String, TaskFactory> taskTypeFactoryMap, TaskManagement.Statistics statistics) {
+        /**
+         * @param task        the task to execute
+         * @param claimAction the {@link GraphClaimable} that performs the CAS claim
+         *                    ({@code PENDING → IN_PROGRESS}).  Only if
+         *                    {@code claimAction.tryClaim()} returns {@code true} does
+         *                    this consumer proceed to execute the task.
+         * @param registry    the registry used for vertex lookup, status updates and
+         *                    delete-on-complete (all graph operations except the claim)
+         * @param taskTypeFactoryMap factories keyed by task type
+         * @param statistics  execution counters
+         */
+        public TaskConsumer(AtlasTask task, GraphClaimable<Boolean> claimAction, TaskRegistry registry, Map<String, TaskFactory> taskTypeFactoryMap, TaskManagement.Statistics statistics) {
             this.task               = task;
+            this.claimAction        = claimAction;
             this.registry           = registry;
             this.taskTypeFactoryMap = taskTypeFactoryMap;
             this.statistics         = statistics;
@@ -89,9 +109,20 @@ public class TaskExecutor {
             int         attemptCount;
 
             try {
+                // GraphClaimable.tryClaim(): atomically transition PENDING → IN_PROGRESS.
+                // In active-active mode multiple nodes may queue the same PENDING task on
+                // startup.  Only the node whose @GraphTransaction commits first proceeds;
+                // all other nodes receive false and skip without executing the task.
+                // Same contract as AsyncImportService.claimNextWaitingImport().
+                boolean claimed = claimAction.tryClaim();
+                if (!claimed) {
+                    TASK_LOG.warn("Task skipped — already claimed by another node or not PENDING.", task);
+                    return;
+                }
+
                 taskVertex = registry.getVertex(task.getGuid());
 
-                if (taskVertex == null || task.getStatus() == AtlasTask.Status.COMPLETE) {
+                if (taskVertex == null) {
                     TASK_LOG.warn("Task not scheduled as it was not found or status was COMPLETE!", task);
 
                     return;

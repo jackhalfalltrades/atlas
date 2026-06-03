@@ -21,6 +21,7 @@ package org.apache.atlas.repository.graph;
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.atlas.ApplicationProperties;
 import org.apache.atlas.AtlasException;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.discovery.SearchIndexer;
 import org.apache.atlas.exception.AtlasBaseException;
 import org.apache.atlas.ha.HAConfiguration;
@@ -244,6 +245,12 @@ public class GraphBackedSearchIndexer implements SearchIndexer, ActiveStateChang
      */
     @Override
     public void instanceIsActive() throws AtlasException {
+        if (!AtlasRunMode.current().runsIndexSetup()) {
+            LOG.info("GraphBackedSearchIndexer.instanceIsActive(): RUN_MODE={} — skipping index setup",
+                    AtlasRunMode.current());
+            return;
+        }
+
         LOG.info("Reacting to active: initializing index");
 
         try {
@@ -251,11 +258,6 @@ public class GraphBackedSearchIndexer implements SearchIndexer, ActiveStateChang
         } catch (RepositoryException | IndexException e) {
             throw new AtlasException("Error in reacting to active on initialization", e);
         }
-    }
-
-    @Override
-    public void instanceIsPassive() {
-        LOG.info("Reacting to passive state: No action right now.");
     }
 
     @Override

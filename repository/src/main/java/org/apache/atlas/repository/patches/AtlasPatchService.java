@@ -19,10 +19,9 @@
 package org.apache.atlas.repository.patches;
 
 import org.apache.atlas.AtlasException;
-import org.apache.atlas.ha.HAConfiguration;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.listener.ActiveStateChangeHandler;
 import org.apache.atlas.service.Service;
-import org.apache.commons.configuration2.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.annotation.Order;
@@ -35,26 +34,16 @@ import javax.inject.Inject;
 public class AtlasPatchService implements Service, ActiveStateChangeHandler {
     private static final Logger LOG = LoggerFactory.getLogger(AtlasPatchService.class);
 
-    private final Configuration     configuration;
     private final AtlasPatchManager patchManager;
 
     @Inject
-    public AtlasPatchService(Configuration configuration, AtlasPatchManager patchManager) {
-        this.configuration = configuration;
+    public AtlasPatchService(AtlasPatchManager patchManager) {
         this.patchManager  = patchManager;
     }
 
     @Override
     public void start() throws AtlasException {
-        LOG.info("==> AtlasPatchService.start()");
-
-        if (!HAConfiguration.isHAEnabled(configuration)) {
-            startInternal();
-        } else {
-            LOG.info("AtlasPatchService.start(): deferring patches until instance activation");
-        }
-
-        LOG.info("<== AtlasPatchService.start()");
+        // activation is handled exclusively by instanceIsActive()
     }
 
     @Override
@@ -66,14 +55,18 @@ public class AtlasPatchService implements Service, ActiveStateChangeHandler {
     public void instanceIsActive() {
         LOG.info("==> AtlasPatchService.instanceIsActive()");
 
+        // Patches run only on MONOLITHIC and INITIALIZER nodes.
+        // METADATA_SERVER and NOTIFICATION_PROCESSOR assume patches were already applied
+        // by an INITIALIZER or MONOLITHIC node and must not re-apply them.
+        if (!AtlasRunMode.current().runsInitialization()) {
+            LOG.info("AtlasPatchService.instanceIsActive(): RUN_MODE={} — skipping patch application",
+                    AtlasRunMode.current());
+            return;
+        }
+
         startInternal();
 
         LOG.info("<== AtlasPatchService.instanceIsActive()");
-    }
-
-    @Override
-    public void instanceIsPassive() {
-        LOG.info("AtlasPatchService.instanceIsPassive(): no action needed");
     }
 
     @Override

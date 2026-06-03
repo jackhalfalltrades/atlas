@@ -32,6 +32,7 @@ import java.util.Collections;
 import java.util.List;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
@@ -106,5 +107,47 @@ public class TaskRegistryTest {
         pendingTasks = registry.getPendingTasks();
 
         assertEquals(pendingTasks.size(), 0);
+    }
+
+    @Test
+    public void tryClaimTask_claimsAPendingTask() throws AtlasBaseException {
+        AtlasTask task = new AtlasTask("claimType", "test", java.util.Collections.singletonMap("k", "v"));
+        registry.save(task);
+        graph.commit();
+
+        boolean claimed = registry.tryClaimTask(task.getGuid());
+
+        assertTrue(claimed, "tryClaimTask must return true for a PENDING task");
+
+        AtlasTask updated = registry.getById(task.getGuid());
+        assertEquals(updated.getStatus(), AtlasTask.Status.IN_PROGRESS,
+                "Status must be IN_PROGRESS after a successful claim");
+
+        registry.deleteByGuid(task.getGuid());
+        graph.commit();
+    }
+
+    @Test
+    public void tryClaimTask_returnsFalse_forNonExistentTask() throws AtlasBaseException {
+        boolean claimed = registry.tryClaimTask("guid-does-not-exist");
+        assertFalse(claimed, "tryClaimTask must return false when task is not found");
+    }
+
+    @Test
+    public void tryClaimTask_returnsFalse_forAlreadyClaimedTask() throws AtlasBaseException {
+        AtlasTask task = new AtlasTask("alreadyClaimed", "test", java.util.Collections.emptyMap());
+        registry.save(task);
+        graph.commit();
+
+        // First claim — should succeed
+        boolean first = registry.tryClaimTask(task.getGuid());
+        assertTrue(first, "First claim must succeed");
+
+        // Second claim on IN_PROGRESS task — must fail (status != PENDING)
+        boolean second = registry.tryClaimTask(task.getGuid());
+        assertFalse(second, "Second claim must return false — task is already IN_PROGRESS");
+
+        registry.deleteByGuid(task.getGuid());
+        graph.commit();
     }
 }

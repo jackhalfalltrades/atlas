@@ -28,6 +28,7 @@ import org.apache.atlas.model.impexp.AsyncImportStatus;
 import org.apache.atlas.model.impexp.AtlasAsyncImportRequest;
 import org.apache.atlas.repository.ogm.DataAccess;
 import org.apache.atlas.repository.store.graph.v2.AtlasGraphUtilsV2;
+import org.apache.atlas.tasks.GraphClaimable;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -47,7 +48,7 @@ import static org.apache.atlas.repository.Constants.PROPERTY_KEY_ASYNC_IMPORT_ST
 import static org.apache.atlas.repository.ogm.impexp.AtlasAsyncImportRequestDTO.ASYNC_IMPORT_TYPE_NAME;
 
 @Service
-public class AsyncImportService {
+public class AsyncImportService implements GraphClaimable<AtlasAsyncImportRequest> {
     private static final Logger LOG = LoggerFactory.getLogger(AsyncImportService.class);
 
     private final DataAccess                                          dataAccess;
@@ -135,6 +136,116 @@ public class AsyncImportService {
                 PROPERTY_KEY_ASYNC_IMPORT_ID);
     }
 
+    /**
+     * Implements {@link GraphClaimable#tryClaim()}: claims the next WAITING import.
+     * Delegates to {@link #claimNextWaitingImport()}.
+     */
+    @Override
+    public AtlasAsyncImportRequest tryClaim() throws AtlasBaseException {
+        return claimNextWaitingImport();
+    }
+
+    /**
+     * Atomically claims the next WAITING import for processing on this node.
+     *
+     * <p>The entire check-then-act is wrapped in a single {@link GraphTransaction}: JanusGraph's
+     * row-level HBase locking ensures that when two nodes race, only one can commit the
+     * WAITING → PROCESSING transition.  The loser gets a locking conflict, the
+     * {@link org.apache.atlas.GraphTransactionInterceptor} retries the transaction, and on
+     * retry the loser finds the import already PROCESSING → returns {@code null}.
+     *
+     * @return the claimed {@link AtlasAsyncImportRequest} (already persisted as PROCESSING),
+     *         or {@code null} if nothing is claimable (another import is running or no WAITING imports exist).
+     */
+    @GraphTransaction
+    public AtlasAsyncImportRequest claimNextWaitingImport() throws AtlasBaseException {
+        if (!fetchInProgressImportIds().isEmpty()) {
+            LOG.debug("claimNextWaitingImport(): an import is already PROCESSING globally, skipping");
+            return null;
+        }
+
+        List<String> waitingIds = fetchQueuedImportRequests();
+        if (waitingIds.isEmpty()) {
+            LOG.debug("claimNextWaitingImport(): no imports in WAITING state");
+            return null;
+        }
+
+        String importId = waitingIds.get(0);
+
+        // Status check: read fresh from JanusGraph — NOT from the per-JVM importCache.
+        // The cache is node-local; in active-active mode another node may have already
+        // transitioned this import to PROCESSING while our cache still shows WAITING.
+        // Only the status field needs a live read; all other fields (parameters, topic name,
+        // importId) are written once at creation and are safe to serve from cache after claiming.
+        ImportStatus liveStatus = fetchStatusFromGraph(importId);
+        if (liveStatus == null || !ImportStatus.WAITING.equals(liveStatus)) {
+            LOG.debug("claimNextWaitingImport(): import {} is no longer WAITING (concurrent claim)", importId);
+            return null;
+        }
+
+        // Status confirmed WAITING in JanusGraph — now load the full object.
+        // Use the cache for the remaining fields (avoids a second graph read for metadata
+        // that cannot have changed since creation).
+        AtlasAsyncImportRequest importRequest = fetchImportRequestByImportId(importId);
+        if (importRequest == null) {
+            LOG.debug("claimNextWaitingImport(): import {} not found", importId);
+            return null;
+        }
+
+        importRequest.setStatus(ImportStatus.PROCESSING);
+        importRequest.setProcessingStartTime(System.currentTimeMillis());
+        saveImportRequest(importRequest);
+
+        LOG.info("claimNextWaitingImport(): successfully claimed import {}", importId);
+        return importRequest;
+    }
+
+    /**
+     * Loads the full import request directly from JanusGraph, bypassing the
+     * per-JVM {@link #importCache}.  Used in the status-query path where any
+     * mutable field (status, processingStartTime, errorMessage, progress) may
+     * have been updated by another node and the cache would return stale data.
+     *
+     * @return the live {@link AtlasAsyncImportRequest}, or {@code null} if not found
+     */
+    AtlasAsyncImportRequest loadFresh(String importId) {
+        try {
+            AtlasAsyncImportRequest request = new AtlasAsyncImportRequest();
+            request.setImportId(importId);
+            return dataAccess.load(request);
+        } catch (Exception e) {
+            LOG.error("loadFresh(): failed to load import {} from JanusGraph", importId, e);
+            return null;
+        }
+    }
+
+    /**
+     * Reads only the {@code status} property of an import request directly from
+     * JanusGraph, bypassing the per-JVM {@link #importCache}.
+     *
+     * <p>Used exclusively in the CAS claim path where a stale cached status would
+     * give a false positive on the WAITING check.  All other metadata fields (topic
+     * name, parameters, importId) are written once at creation and are safe to read
+     * from the cache after the status is confirmed live.
+     *
+     * @return the live {@link ImportStatus}, or {@code null} if the import is not found
+     */
+    ImportStatus fetchStatusFromGraph(String importId) {
+        List<String> values = AtlasGraphUtilsV2.findEntityPropertyValuesByTypeAndAttributes(
+                ASYNC_IMPORT_TYPE_NAME,
+                Collections.singletonMap(PROPERTY_KEY_ASYNC_IMPORT_ID, importId),
+                PROPERTY_KEY_ASYNC_IMPORT_STATUS);
+        if (values == null || values.isEmpty()) {
+            return null;
+        }
+        try {
+            return ImportStatus.valueOf(values.get(0));
+        } catch (IllegalArgumentException e) {
+            LOG.warn("fetchStatusFromGraph(): unrecognised status '{}' for import {}", values.get(0), importId);
+            return null;
+        }
+    }
+
     public void deleteRequests() {
         try {
             dataAccess.delete(AtlasGraphUtilsV2.findEntityGUIDsByType(ASYNC_IMPORT_TYPE_NAME, SortOrder.ASCENDING));
@@ -213,7 +324,14 @@ public class AsyncImportService {
         LOG.debug("==> AsyncImportService.getImportStatusById(importId={})", importId);
 
         try {
-            AtlasAsyncImportRequest importRequest = fetchImportRequestByImportId(importId);
+            // Bypass the per-JVM cache entirely — load directly from JanusGraph.
+            // In active-active mode, any field that changes during processing
+            // (status, processingStartTime, errorMessage, progress counters) is updated
+            // by whichever node owns the import.  A cache-first read on any other node
+            // returns stale values for ALL of these fields, not just status.
+            // Client status queries require correctness over performance, so we always
+            // go to the authoritative store here.
+            AtlasAsyncImportRequest importRequest = loadFresh(importId);
 
             if (importRequest == null) {
                 throw new AtlasBaseException(AtlasErrorCode.IMPORT_NOT_FOUND, importId);
