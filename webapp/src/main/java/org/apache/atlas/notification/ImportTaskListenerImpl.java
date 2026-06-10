@@ -155,14 +155,16 @@ public class ImportTaskListenerImpl implements Service, ActiveStateChangeHandler
 
     @Override
     public void instanceIsActive() {
-        // Import scheduling runs on every mode except NOTIFICATION_PROCESSOR.
-        // NOTIFICATION_PROCESSOR is for hook message consumption only — it does not accept
-        // import API calls or drive import workflows.
-        // Note: this class uses NotificationHookConsumer only to create per-import Kafka
-        // consumers on dedicated topics; the main hook consumer loop does not need to be
-        // running for import processing to work.
-        if (AtlasRunMode.current() == AtlasRunMode.NOTIFICATION_PROCESSOR) {
-            LOG.info("ImportTaskListenerImpl.instanceIsActive(): RUN_MODE=NOTIFICATION_PROCESSOR — skipping import scheduler");
+        // Import scheduling only runs on nodes that serve the REST API and process imports:
+        // MONOLITHIC and METADATA_SERVER.
+        //
+        // NOTIFICATION_PROCESSOR — hook consumer only, no import API, no scheduler needed.
+        // INITIALIZER            — one-shot init that exits immediately; starting a polling
+        //                          scheduler here causes it to fire against a closing graph
+        //                          during JVM shutdown, flooding logs with errors.
+        if (!AtlasRunMode.current().runsMetadataServer()) {
+            LOG.info("ImportTaskListenerImpl.instanceIsActive(): RUN_MODE={} — skipping import scheduler",
+                    AtlasRunMode.current());
             return;
         }
 
@@ -256,6 +258,12 @@ public class ImportTaskListenerImpl implements Service, ActiveStateChangeHandler
      */
     @VisibleForTesting
     void tryClaimAndStartImport() {
+        // Final guard: abort if called on a non-metadata-server node (e.g. INITIALIZER
+        // during JVM shutdown when the scheduler fires against a closing graph).
+        if (!AtlasRunMode.current().runsMetadataServer()) {
+            return;
+        }
+
         if (!asyncImportSemaphore.tryAcquire()) {
             LOG.info("tryClaimAndStartImport(): an import is already running on this node, skipping");
             return;
@@ -264,6 +272,12 @@ public class ImportTaskListenerImpl implements Service, ActiveStateChangeHandler
         AtlasAsyncImportRequest claimed = null;
         try {
             claimed = asyncImportService.tryClaim();
+        } catch (IllegalStateException e) {
+            // Graph is closed — this happens during JVM shutdown (INITIALIZER mode exits
+            // via System.exit(0) while the poller is still scheduled).  Silently stop.
+            asyncImportSemaphore.release();
+            stopScheduler();
+            return;
         } catch (Exception e) {
             LOG.error("tryClaimAndStartImport(): failed to claim next import from JanusGraph", e);
         }
@@ -284,6 +298,14 @@ public class ImportTaskListenerImpl implements Service, ActiveStateChangeHandler
     }
 
     private void startScheduler() {
+        // Hard guard: never create the scheduler on nodes that don't serve imports.
+        // This catches any call path that bypasses the instanceIsActive() check.
+        if (!AtlasRunMode.current().runsMetadataServer()) {
+            LOG.info("startScheduler(): RUN_MODE={} — not starting import poller",
+                    AtlasRunMode.current());
+            return;
+        }
+
         if (scheduler != null && !scheduler.isShutdown()) {
             LOG.debug("startScheduler(): already running");
             return;
@@ -292,6 +314,7 @@ public class ImportTaskListenerImpl implements Service, ActiveStateChangeHandler
         scheduler = Executors.newSingleThreadScheduledExecutor(
                 new ThreadFactoryBuilder()
                         .setNameFormat(THREADNAME_PREFIX + "-poller-%d")
+                        .setDaemon(true)   // daemon so JVM shutdown isn't blocked
                         .setUncaughtExceptionHandler((t, ex) ->
                                 LOG.error("Uncaught exception in import poller thread {}", t.getName(), ex))
                         .build());
