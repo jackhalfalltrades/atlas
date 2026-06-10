@@ -53,6 +53,34 @@ if [ ! -f "${SENTINEL}" ]; then
     sed -i "/^atlas.kafka.zookeeper.connect=/d" "${PROPS}"
 
 
+    # Header-based authentication — stateless, no session affinity needed.
+    # The client passes x-awc-username/x-awc-roles/x-awc-requestid headers
+    # and Atlas trusts them directly without maintaining server-side sessions.
+    # This allows pure round-robin load balancing across all metadata-server
+    # replicas without ip_hash.
+    if [ "${RUN_MODE}" = "METADATA_SERVER" ] || [ "${RUN_MODE}" = "MONOLITHIC" ]; then
+        if grep -q "^atlas.authn.header.enabled=" "${PROPS}"; then
+            sed -i "s|^atlas.authn.header.enabled=.*|atlas.authn.header.enabled=true|" "${PROPS}"
+        else
+            echo "atlas.authn.header.enabled=true" >> "${PROPS}"
+        fi
+        if grep -q "^atlas.authn.header.username=" "${PROPS}"; then
+            sed -i "s|^atlas.authn.header.username=.*|atlas.authn.header.username=x-awc-username|" "${PROPS}"
+        else
+            echo "atlas.authn.header.username=x-awc-username" >> "${PROPS}"
+        fi
+        if grep -q "^atlas.authn.header.roles=" "${PROPS}"; then
+            sed -i "s|^atlas.authn.header.roles=.*|atlas.authn.header.roles=x-awc-roles|" "${PROPS}"
+        else
+            echo "atlas.authn.header.roles=x-awc-roles" >> "${PROPS}"
+        fi
+        if grep -q "^atlas.authn.header.requestid=" "${PROPS}"; then
+            sed -i "s|^atlas.authn.header.requestid=.*|atlas.authn.header.requestid=x-awc-requestid|" "${PROPS}"
+        else
+            echo "atlas.authn.header.requestid=x-awc-requestid" >> "${PROPS}"
+        fi
+    fi
+
     if grep -q "^atlas.graph.storage.hbase.compression-algorithm=" "${PROPS}"; then
         sed -i "s|^atlas.graph.storage.hbase.compression-algorithm=.*|atlas.graph.storage.hbase.compression-algorithm=NONE|" "${PROPS}"
     else

@@ -110,6 +110,24 @@ services:
       service: atlas-kafka
       file: docker-compose.atlas-common.yml
 
+  # --------------------------------------------------------------------------
+  # Optional: Hive + Postgres (start on demand to test Atlas Hive hook)
+  #   docker compose -f docker-compose.atlas-active-active.yml up -d atlas-db atlas-hive
+  # --------------------------------------------------------------------------
+
+  # Postgres — Hive metastore database (not the Atlas graph backend).
+  atlas-db:
+    extends:
+      service: atlas-db
+      file: docker-compose.atlas-common.yml
+
+  # Hive — Hive DDL operations send hook messages to Kafka which are
+  # consumed by NOTIFICATION_PROCESSOR replicas and loaded into Atlas.
+  atlas-hive:
+    extends:
+      service: atlas-hive
+      file: docker-compose.atlas-hive.yml
+
   atlas-solr:
     extends:
       service: atlas-solr
