@@ -2,17 +2,20 @@
 # Atlas Active-Active Multi-Instance Docker Compose
 # =============================================================================
 #
+# Based on docker-compose.atlas.yml (single-node reference).
+# Adds INITIALIZER + METADATA_SERVER + NOTIFICATION_PROCESSOR roles driven
+# by the RUN_MODE environment variable.
+#
 # Startup order (enforced by depends_on conditions):
 #
 #   [1] Infrastructure  atlas-zk (*), atlas-kafka, atlas-solr, atlas-backend
+#                       atlas-hadoop (required by HBase/HDFS)
 #
 #   (*) atlas-zk is NOT used by Atlas itself — Atlas has no ZooKeeper or
 #       leader-election dependency (CuratorFactory/ActiveInstanceElectorService
 #       were removed).  ZooKeeper is required only by:
 #         • HBase — for its own distributed coordination
 #         • Kafka  — the bundled image runs in ZK mode (server.properties).
-#                    If you switch to a KRaft-mode Kafka you can remove the
-#                    Kafka→ZK dependency, but HBase still needs atlas-zk.
 #           ↓
 #   [2] INITIALIZER     RUN_MODE=INITIALIZER  (x1, exits 0 when done)
 #       Sets up JanusGraph indices, bootstraps type-defs, applies patches.
@@ -29,76 +32,63 @@
 #   [4]  LOAD BALANCER  Nginx — round-robins across all metadata-server replicas.
 #
 # ---------------------------------------------------------------------------
-# Changing replica counts (three equivalent ways):
+# Changing replica counts:
 #
-#   1. Edit .env  → METADATA_SERVER_REPLICAS=5  then:  docker compose up -d
-#
-#   2. Inline env:
-#        METADATA_SERVER_REPLICAS=5 docker compose \
-#          -f docker-compose.atlas-active-active.yml up -d
-#
-#   3. --scale flag (overrides .env):
+#   1. Edit .env  → METADATA_SERVER_REPLICAS=3  then:  docker compose up -d
+#   2. --scale flag:
 #        docker compose -f docker-compose.atlas-active-active.yml up -d \
-#          --scale atlas-metadata-server=5 \
+#          --scale atlas-metadata-server=3 \
 #          --scale atlas-notification-proc=2
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Shared build fragment (NOT used for depends_on — see note below)
-# NOTE: YAML merge (<<:) does NOT deep-merge nested maps.  depends_on MUST be
-#       declared explicitly on every service to avoid the child silently
-#       replacing the parent's entire depends_on map.
+# Shared Atlas build/image fragment — mirrors docker-compose.atlas.yml exactly
+# for the build section, adding only command and network.
+# NOTE: YAML merge (<<:) does NOT deep-merge nested maps so depends_on is
+#       declared explicitly on each service.
 # ---------------------------------------------------------------------------
 x-atlas-build: &atlas-build
   build:
     context: .
     dockerfile: Dockerfile.atlas
     args:
-      - ATLAS_BACKEND=${ATLAS_BACKEND:-hbase}
-      - ATLAS_SERVER_JAVA_VERSION=${ATLAS_SERVER_JAVA_VERSION:-11}
+      - ATLAS_BACKEND=${ATLAS_BACKEND}
+      - ATLAS_SERVER_JAVA_VERSION=${ATLAS_SERVER_JAVA_VERSION}
       - ATLAS_VERSION=${ATLAS_VERSION}
   image: atlas:latest
   stdin_open: true
   tty: true
   networks:
     - atlas
-  # Each container writes its own atlas-application.properties on first start.
-  # Named volumes give each replica a stable, persistent home directory so the
-  # .setupDone sentinel file survives restarts and setup only runs once.
-  command:
+  volumes:
+    - ./data:/home/atlas/data
+  # Use entrypoint (not command) because Dockerfile.atlas uses ENTRYPOINT which
+  # is NOT overridden by compose 'command' — 'command' only replaces CMD.
+  entrypoint:
     - /home/atlas/scripts/atlas-active-active.sh
-
-# ---------------------------------------------------------------------------
-# Shared environment fragment
-# ---------------------------------------------------------------------------
-x-atlas-env: &atlas-env
-  ATLAS_BACKEND: ${ATLAS_BACKEND:-hbase}
-  ATLAS_SERVER_JAVA_VERSION: ${ATLAS_SERVER_JAVA_VERSION:-11}
-  ATLAS_VERSION: ${ATLAS_VERSION}
 
 # ---------------------------------------------------------------------------
 services:
 
   # ==========================================================================
-  # [1] Infrastructure
+  # [1] Infrastructure  — identical to docker-compose.atlas.yml + atlas-hadoop
   # ==========================================================================
 
   # Hadoop (HDFS) — required by HBase as its storage layer.
-  # Only needed when ATLAS_BACKEND=hbase.
+  # Run alongside docker-compose.atlas.yml with -f docker-compose.atlas-hadoop.yml
+  # is the pattern in the README; here we include it directly.
   atlas-hadoop:
     extends:
       service: atlas-hadoop
       file: docker-compose.atlas-hadoop.yml
 
-  # HBase / Postgres — selected by ATLAS_BACKEND (default: hbase).
-  # We extend atlas-hbase directly (one level) instead of going through
-  # docker-compose.atlas-backend.yml (two levels), because Docker Compose
-  # cannot resolve a transitive depends_on through double-level extends.
-  #
-  # IMPORTANT: the base healthcheck only probes the RegionServer HTTP port,
-  # which responds before HBase has written /hbase/hbaseid to ZooKeeper.
-  # We override it here to use `hbase status` which verifies that ZooKeeper
-  # is fully initialised and Atlas can safely connect.
+  # HBase backend (atlas-hbase extended directly — one level — to avoid the
+  # double-extends bug where Docker Compose cannot resolve a transitive
+  # depends_on through two levels of extends).
+  # Override healthcheck: the default probes only the RegionServer HTTP port
+  # which responds before /hbase/hbaseid is written to ZooKeeper.
+  # Using `hbase status` ensures ZooKeeper is fully initialised before Atlas
+  # is allowed to connect.
   atlas-backend:
     extends:
       service: atlas-hbase
@@ -138,10 +128,13 @@ services:
     container_name: atlas-initializer
     hostname: atlas-initializer.example.com
     environment:
-      <<: *atlas-env
-      RUN_MODE: INITIALIZER
+      - ATLAS_BACKEND
+      - ATLAS_SERVER_JAVA_VERSION
+      - ATLAS_VERSION
+      - RUN_MODE=INITIALIZER
     volumes:
-      - atlas-initializer-home:/opt/atlas         # persists .setupDone
+      - ./data:/home/atlas/data
+      - atlas-initializer-home:/opt/atlas/data
     depends_on:
       atlas-backend:
         condition: service_healthy
@@ -151,30 +144,24 @@ services:
         condition: service_started
       atlas-zk:
         condition: service_started
-    # restart: "no" — Docker Compose default for a one-shot container.
-    # Once it exits 0, downstream services (metadata-server, notification-proc)
-    # are released by the service_completed_successfully condition.
     restart: "no"
 
   # ==========================================================================
-  # [3a] METADATA_SERVER — starts immediately after initializer exits 0
-  # Scale:  --scale atlas-metadata-server=N   or   METADATA_SERVER_REPLICAS=N in .env
+  # [3a] METADATA_SERVER — starts after initializer exits 0
+  # Scale:  --scale atlas-metadata-server=N   or   METADATA_SERVER_REPLICAS=N
   # ==========================================================================
   atlas-metadata-server:
     <<: *atlas-build
-    # No container_name — required for multiple replicas.
     hostname: atlas-metadata-server.example.com
     environment:
-      <<: *atlas-env
-      RUN_MODE: METADATA_SERVER
+      - ATLAS_BACKEND
+      - ATLAS_SERVER_JAVA_VERSION
+      - ATLAS_VERSION
+      - RUN_MODE=METADATA_SERVER
     volumes:
-      # Each replica gets its own named volume so setup runs once per replica.
-      # Docker Compose appends the replica index:  atlas-metadata-server-home-1, -2, …
-      - atlas-metadata-server-home:/opt/atlas
-    # No direct port exposure — access through atlas-lb on ${ATLAS_LB_PORT:-21000}.
-    # To inspect individual replicas, add:  ports: ["0:21000"]  (random host ports)
+      - ./data:/home/atlas/data
+      - atlas-metadata-server-home:/opt/atlas/data
     depends_on:
-      # Infrastructure must be healthy first
       atlas-backend:
         condition: service_healthy
       atlas-kafka:
@@ -183,35 +170,38 @@ services:
         condition: service_started
       atlas-zk:
         condition: service_started
-      # Initializer must complete successfully before any server starts
       atlas-initializer:
         condition: service_completed_successfully
     healthcheck:
-      test: >
-        curl -sf -u admin:admin
-        http://localhost:21000/api/atlas/admin/status
-        | grep -q '"Status":"ACTIVE"'
+      test:
+        - "CMD-SHELL"
+        - >
+          wget -qO-
+          http://localhost:21000/api/atlas/admin/status
+          2>/dev/null | grep -q '"Status":"ACTIVE"'
       interval: 30s
       timeout: 10s
-      retries: 10
-      start_period: 90s
+      retries: 20
+      start_period: 600s
     restart: unless-stopped
     deploy:
       replicas: ${METADATA_SERVER_REPLICAS:-2}
 
   # ==========================================================================
-  # [3b] NOTIFICATION_PROCESSOR — starts immediately after initializer exits 0
-  # Scale:  --scale atlas-notification-proc=N   or   NOTIFICATION_PROC_REPLICAS=N in .env
+  # [3b] NOTIFICATION_PROCESSOR — starts after initializer exits 0
+  # Scale:  --scale atlas-notification-proc=N   or   NOTIFICATION_PROC_REPLICAS=N
   # ==========================================================================
   atlas-notification-proc:
     <<: *atlas-build
     hostname: atlas-notification-proc.example.com
     environment:
-      <<: *atlas-env
-      RUN_MODE: NOTIFICATION_PROCESSOR
+      - ATLAS_BACKEND
+      - ATLAS_SERVER_JAVA_VERSION
+      - ATLAS_VERSION
+      - RUN_MODE=NOTIFICATION_PROCESSOR
     volumes:
-      - atlas-notification-proc-home:/opt/atlas
-    # No ports — notification processor serves no REST endpoints.
+      - ./data:/home/atlas/data
+      - atlas-notification-proc-home:/opt/atlas/data
     depends_on:
       atlas-backend:
         condition: service_healthy
