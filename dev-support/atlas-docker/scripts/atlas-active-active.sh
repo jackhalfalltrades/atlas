@@ -20,6 +20,7 @@
 
 RUN_MODE="${RUN_MODE:-MONOLITHIC}"
 ATLAS_HOME="${ATLAS_HOME:-/opt/atlas}"
+PROPS="${ATLAS_HOME}/conf/atlas-application.properties"
 # Sentinel lives in /opt/atlas/data (the named volume mount point) so it
 # persists across container restarts without shadowing the full installation.
 SENTINEL="${ATLAS_HOME}/data/.setupDone"
@@ -32,6 +33,17 @@ echo " ATLAS_BACKEND     = ${ATLAS_BACKEND:-hbase}"
 echo " ATLAS_VERSION     = ${ATLAS_VERSION:-unknown}"
 echo "============================================================"
 
+ensure_prop() {
+    key="$1"
+    value="$2"
+
+    if grep -q "^${key}=" "${PROPS}"; then
+        sed -i "s|^${key}=.*|${key}=${value}|" "${PROPS}"
+    else
+        printf "\n%s=%s\n" "${key}" "${value}" >> "${PROPS}"
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # One-time per-container configuration
 # ---------------------------------------------------------------------------
@@ -40,57 +52,6 @@ if [ ! -f "${SENTINEL}" ]; then
 
     encryptedPwd=$(${ATLAS_HOME}/bin/cputil.py -g -u admin -p atlasR0cks! -s | tail -1)
     echo "admin=ADMIN::${encryptedPwd}" > "${ATLAS_HOME}/conf/users-credentials.properties"
-
-    PROPS="${ATLAS_HOME}/conf/atlas-application.properties"
-
-    sed -i "s|atlas.graph.storage.hostname=.*|atlas.graph.storage.hostname=atlas-zk.example.com:2181|" "${PROPS}"
-    sed -i "s|atlas.audit.hbase.zookeeper.quorum=.*|atlas.audit.hbase.zookeeper.quorum=atlas-zk.example.com:2181|" "${PROPS}"
-    sed -i "s|^atlas.graph.index.search.solr.mode=cloud|# atlas.graph.index.search.solr.mode=cloud|" "${PROPS}"
-    sed -i "s|^# *atlas.graph.index.search.solr.mode=http|atlas.graph.index.search.solr.mode=http|" "${PROPS}"
-    sed -i "s|^.*atlas.graph.index.search.solr.http-urls=.*|atlas.graph.index.search.solr.http-urls=http://atlas-solr.example.com:8983/solr|" "${PROPS}"
-    sed -i "s|atlas.notification.embedded=.*|atlas.notification.embedded=false|" "${PROPS}"
-    sed -i "s|atlas.kafka.bootstrap.servers=.*|atlas.kafka.bootstrap.servers=atlas-kafka.example.com:9092|" "${PROPS}"
-    sed -i "/^atlas.kafka.zookeeper.connect=/d" "${PROPS}"
-
-
-    # Header-based authentication — stateless, no session affinity needed.
-    # The client passes x-awc-username/x-awc-roles/x-awc-requestid headers
-    # and Atlas trusts them directly without maintaining server-side sessions.
-    # This allows pure round-robin load balancing across all metadata-server
-    # replicas without ip_hash.
-    if [ "${RUN_MODE}" = "METADATA_SERVER" ] || [ "${RUN_MODE}" = "MONOLITHIC" ]; then
-        if grep -q "^atlas.authn.header.enabled=" "${PROPS}"; then
-            sed -i "s|^atlas.authn.header.enabled=.*|atlas.authn.header.enabled=true|" "${PROPS}"
-        else
-            echo "atlas.authn.header.enabled=true" >> "${PROPS}"
-        fi
-        if grep -q "^atlas.authn.header.username=" "${PROPS}"; then
-            sed -i "s|^atlas.authn.header.username=.*|atlas.authn.header.username=x-awc-username|" "${PROPS}"
-        else
-            echo "atlas.authn.header.username=x-awc-username" >> "${PROPS}"
-        fi
-        if grep -q "^atlas.authn.header.roles=" "${PROPS}"; then
-            sed -i "s|^atlas.authn.header.roles=.*|atlas.authn.header.roles=x-awc-roles|" "${PROPS}"
-        else
-            echo "atlas.authn.header.roles=x-awc-roles" >> "${PROPS}"
-        fi
-        if grep -q "^atlas.authn.header.requestid=" "${PROPS}"; then
-            sed -i "s|^atlas.authn.header.requestid=.*|atlas.authn.header.requestid=x-awc-requestid|" "${PROPS}"
-        else
-            echo "atlas.authn.header.requestid=x-awc-requestid" >> "${PROPS}"
-        fi
-    fi
-
-    if grep -q "^atlas.graph.storage.hbase.compression-algorithm=" "${PROPS}"; then
-        sed -i "s|^atlas.graph.storage.hbase.compression-algorithm=.*|atlas.graph.storage.hbase.compression-algorithm=NONE|" "${PROPS}"
-    else
-        echo "atlas.graph.storage.hbase.compression-algorithm=NONE" >> "${PROPS}"
-    fi
-    if grep -q "^atlas.graph.graph.replace-instance-if-exists=" "${PROPS}"; then
-        sed -i "s|^atlas.graph.graph.replace-instance-if-exists=.*|atlas.graph.graph.replace-instance-if-exists=true|" "${PROPS}"
-    else
-        echo "atlas.graph.graph.replace-instance-if-exists=true" >> "${PROPS}"
-    fi
 
     if [ "${ATLAS_BACKEND:-hbase}" = "postgres" ]; then
         sed -i "s|^atlas.graph.storage.backend=hbase2|# atlas.graph.storage.backend=hbase2|" "${PROPS}"
@@ -112,6 +73,33 @@ EOF
     echo "[setup] Done — sentinel written to ${SENTINEL}"
 else
     echo "[setup] Already configured (sentinel exists), skipping."
+fi
+
+# ---------------------------------------------------------------------------
+# Always reconcile required runtime properties.
+# This prevents stale .setupDone state from leaving core backend properties
+# unconfigured and breaking initializer startup.
+# ---------------------------------------------------------------------------
+ensure_prop "atlas.graph.storage.hostname" "atlas-zk.example.com:2181"
+ensure_prop "atlas.audit.hbase.zookeeper.quorum" "atlas-zk.example.com:2181"
+
+sed -i "s|^atlas.graph.index.search.solr.mode=cloud|# atlas.graph.index.search.solr.mode=cloud|" "${PROPS}"
+sed -i "s|^# *atlas.graph.index.search.solr.mode=http|atlas.graph.index.search.solr.mode=http|" "${PROPS}"
+ensure_prop "atlas.graph.index.search.solr.http-urls" "http://atlas-solr.example.com:8983/solr"
+ensure_prop "atlas.notification.embedded" "false"
+ensure_prop "atlas.kafka.bootstrap.servers" "atlas-kafka.example.com:9092"
+sed -i "/^atlas.kafka.zookeeper.connect=/d" "${PROPS}"
+ensure_prop "atlas.graph.storage.hbase.compression-algorithm" "NONE"
+ensure_prop "atlas.graph.graph.replace-instance-if-exists" "true"
+
+# Header-based authentication — stateless, no session affinity needed.
+# The client passes x-awc-username/x-awc-roles/x-awc-requestid headers
+# and Atlas trusts them directly without maintaining server-side sessions.
+if [ "${RUN_MODE}" = "METADATA_SERVER" ] || [ "${RUN_MODE}" = "MONOLITHIC" ]; then
+    ensure_prop "atlas.authn.header.enabled" "true"
+    ensure_prop "atlas.authn.header.username" "x-awc-username"
+    ensure_prop "atlas.authn.header.roles" "x-awc-roles"
+    ensure_prop "atlas.authn.header.requestid" "x-awc-requestid"
 fi
 
 # ---------------------------------------------------------------------------
