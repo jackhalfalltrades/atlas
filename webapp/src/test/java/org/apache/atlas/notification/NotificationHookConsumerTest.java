@@ -21,9 +21,9 @@ import org.apache.atlas.ApplicationProperties;
 import org.apache.atlas.AtlasConfiguration;
 import org.apache.atlas.AtlasErrorCode;
 import org.apache.atlas.AtlasException;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.AtlasServiceException;
 import org.apache.atlas.exception.AtlasBaseException;
-import org.apache.atlas.ha.HAConfiguration;
 import org.apache.atlas.kafka.AtlasKafkaMessage;
 import org.apache.atlas.kafka.KafkaNotification;
 import org.apache.atlas.model.instance.AtlasEntity;
@@ -242,30 +242,21 @@ public class NotificationHookConsumerTest {
 
         consumers.add(notificationConsumerMock);
 
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(false);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
         NotificationHookConsumer notificationHookConsumer = new NotificationHookConsumer(notificationInterface, atlasEntityStore, serviceState, instanceConverter, typeRegistry, metricsUtil, null, asyncImporter);
-        notificationHookConsumer.startInternal(configuration, executorService);
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, executorService);
 
         verify(notificationInterface).createConsumers(NotificationType.HOOK, 1);
         verify(executorService, times(1)).submit(any(NotificationHookConsumer.HookConsumer.class));
     }
 
     @Test
-    public void testConsumersAreNotStartedIfHAIsEnabled() throws Exception {
-        List<NotificationConsumer<Object>> consumers = new ArrayList();
-        NotificationConsumer notificationConsumerMock = mock(NotificationConsumer.class);
-
-        consumers.add(notificationConsumerMock);
-
-        when(configuration.containsKey(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY)).thenReturn(true);
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY)).thenReturn(true);
-        when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
-        when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
+    public void testHookConsumersNotStartedInMetadataServerMode() throws Exception {
+        // METADATA_SERVER mode initialises infrastructure but does NOT start hook consumers.
         NotificationHookConsumer notificationHookConsumer = new NotificationHookConsumer(notificationInterface, atlasEntityStore, serviceState, instanceConverter, typeRegistry, metricsUtil, null, asyncImporter);
 
-        notificationHookConsumer.startInternal(configuration, executorService);
+        notificationHookConsumer.startInternal(AtlasRunMode.METADATA_SERVER, executorService);
 
         verifyZeroInteractions(notificationInterface);
     }
@@ -277,15 +268,14 @@ public class NotificationHookConsumerTest {
 
         consumers.add(notificationConsumerMock);
 
-        when(configuration.containsKey(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY)).thenReturn(true);
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY)).thenReturn(true);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
 
         NotificationHookConsumer notificationHookConsumer = new NotificationHookConsumer(notificationInterface, atlasEntityStore, serviceState, instanceConverter, typeRegistry, metricsUtil, null, asyncImporter);
 
-        notificationHookConsumer.startInternal(configuration, executorService);
-        notificationHookConsumer.instanceIsActive();
+        // Initialise infrastructure (METADATA_SERVER), then instanceIsActive triggers hook consumers.
+        notificationHookConsumer.startInternal(AtlasRunMode.METADATA_SERVER, executorService);
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, executorService);
 
         verify(notificationInterface).createConsumers(NotificationType.HOOK, 1);
         verify(executorService).submit(any(NotificationHookConsumer.HookConsumer.class));
@@ -299,7 +289,6 @@ public class NotificationHookConsumerTest {
         consumers.add(notificationConsumerMock);
 
         when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.ACTIVE);
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(true);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
         final NotificationHookConsumer notificationHookConsumer = new NotificationHookConsumer(notificationInterface, atlasEntityStore, serviceState, instanceConverter, typeRegistry, metricsUtil, null, asyncImporter);
@@ -314,7 +303,7 @@ public class NotificationHookConsumerTest {
             }
         }).when(executorService).submit(any(NotificationHookConsumer.HookConsumer.class));
 
-        notificationHookConsumer.startInternal(configuration, executorService);
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, executorService);
         notificationHookConsumer.stop();
 
         verify(notificationInterface).close();
@@ -330,12 +319,11 @@ public class NotificationHookConsumerTest {
         consumers.add(notificationConsumerMock);
 
         when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.ACTIVE);
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(true);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
         final NotificationHookConsumer notificationHookConsumer = new NotificationHookConsumer(notificationInterface, atlasEntityStore, serviceState, instanceConverter, typeRegistry, metricsUtil, null, asyncImporter);
 
-        notificationHookConsumer.startInternal(configuration, executorService);
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, executorService);
         notificationHookConsumer.stop();
 
         verify(notificationInterface).close();
@@ -356,7 +344,7 @@ public class NotificationHookConsumerTest {
             }
         }).when(executorService).submit(any(NotificationHookConsumer.HookConsumer.class));
 
-        notificationHookConsumer.startInternal(configuration, executorService);
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, executorService);
         Thread.sleep(1000);
 
         assertTrue(notificationHookConsumer.consumers.get(0).isAlive());
@@ -378,7 +366,7 @@ public class NotificationHookConsumerTest {
             }
         }).when(executorService).submit(any(NotificationHookConsumer.HookConsumer.class));
 
-        notificationHookConsumer.startInternal(configuration, executorService);
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, executorService);
         Thread.sleep(500);
 
         notificationHookConsumer.consumers.get(0).shutdown();
@@ -413,7 +401,7 @@ public class NotificationHookConsumerTest {
         consumerDisabledField.set(notificationHookConsumer, true);
 
         // initializing the executors
-        notificationHookConsumer.startInternal(configuration, null);
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, null);
 
         notificationHookConsumer.startAsyncImportConsumer(ASYNC_IMPORT, importId, "ATLAS_IMPORT_" + importId);
 
@@ -428,11 +416,9 @@ public class NotificationHookConsumerTest {
     }
 
     @Test
-    public void testExecutorCreatedOnlyOnceAcrossStartAndHAActive() throws Exception {
-        // Setup
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(false);
-        when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
+    public void testExecutorCreatedOnlyOnceAcrossMultipleStartCalls() throws Exception {
         when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.ACTIVE);
+        when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
 
         List<NotificationConsumer<Object>> consumers = new ArrayList<>();
         consumers.add(mock(NotificationConsumer.class));
@@ -440,14 +426,11 @@ public class NotificationHookConsumerTest {
 
         TestableNotificationHookConsumer hookConsumer = new TestableNotificationHookConsumer();
 
-        // Call startInternal() twice
-        hookConsumer.startInternal(configuration, null);
-        hookConsumer.startInternal(configuration, null);
+        // Two MONOLITHIC startInternal calls: executor should be created on first call only.
+        hookConsumer.startInternal(AtlasRunMode.MONOLITHIC, null);
+        hookConsumer.startInternal(AtlasRunMode.MONOLITHIC, null);
+        hookConsumer.startInternal(AtlasRunMode.NOTIFICATION_PROCESSOR, null);
 
-        // Simulate HA active instance, which may call executor creation
-        hookConsumer.instanceIsActive();
-
-        // Validate executor was created only once
         assertEquals(hookConsumer.getExecutorCreationCount(), 1, "Executor should be created only once and reused");
     }
 
@@ -456,16 +439,15 @@ public class NotificationHookConsumerTest {
         TestableNotificationHookConsumer notificationHookConsumer = new TestableNotificationHookConsumer();
 
         when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.ACTIVE);
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(true);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1))
                 .thenReturn(Collections.singletonList(mock(NotificationConsumer.class)));
 
-        notificationHookConsumer.instanceIsActive();
-        notificationHookConsumer.instanceIsActive();  // should not recreate
+        notificationHookConsumer.startInternal(AtlasRunMode.NOTIFICATION_PROCESSOR, null);
+        notificationHookConsumer.startInternal(AtlasRunMode.NOTIFICATION_PROCESSOR, null);  // should not recreate
 
         assertEquals(notificationHookConsumer.getExecutorCreationCount(), 1,
-                "Executor should be created only once even if instanceIsActive is called multiple times");
+                "Executor should be created only once even if activation is triggered multiple times");
     }
 
     @Test
@@ -474,13 +456,12 @@ public class NotificationHookConsumerTest {
                 new TestableNotificationHookConsumer();
 
         when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.ACTIVE);
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(false);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1))
                 .thenReturn(Collections.singletonList(mock(NotificationConsumer.class)));
 
-        notificationHookConsumer.startInternal(configuration, null);
-        notificationHookConsumer.instanceIsActive();  // executor already exists
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, null);
+        notificationHookConsumer.instanceIsActive();  // executor already exists; should not recreate
 
         assertEquals(notificationHookConsumer.getExecutorCreationCount(), 1,
                 "Executor should not be created again in instanceIsActive if already created in startInternal");
@@ -497,8 +478,8 @@ public class NotificationHookConsumerTest {
         when(notificationInterface.createConsumers(NotificationType.ASYNC_IMPORT, 1))
                 .thenReturn(Collections.singletonList(mock(NotificationConsumer.class)));
 
-        // Manually trigger executor creation
-        notificationHookConsumer.startInternal(configuration, null);
+        // Initialise infrastructure only (no hook consumers needed for import test).
+        notificationHookConsumer.startInternal(AtlasRunMode.METADATA_SERVER, null);
 
         // Call import consumer – should use the same executor
         notificationHookConsumer.startAsyncImportConsumer(NotificationType.ASYNC_IMPORT, importId, topic);
@@ -509,11 +490,6 @@ public class NotificationHookConsumerTest {
 
     @Test
     public void testHookConsumersNotStartedWhenConsumersAreDisabled() throws Exception {
-        // Arrange
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(false);
-        when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
-
-        // TestableNotificationHookConsumer with override that sets consumerDisabled = true
         NotificationHookConsumer notificationHookConsumer = new NotificationHookConsumer(notificationInterface, atlasEntityStore, serviceState, instanceConverter, typeRegistry, metricsUtil, null, asyncImporter) {
             @Override
             protected ExecutorService createExecutor() {
@@ -531,11 +507,8 @@ public class NotificationHookConsumerTest {
         consumerDisabledField.setAccessible(true);
         consumerDisabledField.set(notificationHookConsumer, true);
 
-        // Act
-        notificationHookConsumer.startInternal(configuration, null);
-
-        // Assert
-        // No exception = test passed; if startHookConsumers() is invoked, it will throw
+        // consumerDisabled=true causes startInternal to skip startHookConsumers(); no exception expected.
+        notificationHookConsumer.startInternal(AtlasRunMode.MONOLITHIC, null);
     }
 
     private NotificationHookConsumer setupNotificationHookConsumer() throws AtlasException {
@@ -545,7 +518,6 @@ public class NotificationHookConsumerTest {
         consumers.add(notificationConsumerMock);
 
         when(serviceState.getState()).thenReturn(ServiceState.ServiceStateValue.ACTIVE);
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(true);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
         when(notificationConsumerMock.receive()).thenThrow(new IllegalStateException());
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
@@ -1026,21 +998,14 @@ public class NotificationHookConsumerTest {
     }
 
     @Test
-    public void testStartMethod() throws Exception {
+    public void testStartMethodIsNoOp() throws Exception {
+        // start() is intentionally empty: activation is handled exclusively by instanceIsActive().
         NotificationHookConsumer consumer = createTestConsumer();
-
-        // Mock configuration for HA disabled
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(false);
-        when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
-
-        List<NotificationConsumer<Object>> consumers = new ArrayList<>();
-        consumers.add(mock(NotificationConsumer.class));
-        when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
 
         consumer.start();
 
-        // Should call startInternal with application properties
-        verify(notificationInterface).createConsumers(NotificationType.HOOK, 1);
+        // Consumers are never created during start(); notificationInterface must not be touched.
+        verifyZeroInteractions(notificationInterface);
     }
 
     @Test
@@ -2020,15 +1985,14 @@ public class NotificationHookConsumerTest {
     public void testStartInternalWithNullExecutor() throws Exception {
         NotificationHookConsumer consumer = createTestConsumer();
 
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(false);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
 
         List<NotificationConsumer<Object>> consumers = new ArrayList<>();
         consumers.add(mock(NotificationConsumer.class));
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
 
-        // Pass null executor - should create its own
-        consumer.startInternal(configuration, null);
+        // Null executor: startInternal should create its own via createExecutor().
+        consumer.startInternal(AtlasRunMode.MONOLITHIC, null);
 
         Field executorsField = NotificationHookConsumer.class.getDeclaredField("executors");
         executorsField.setAccessible(true);
@@ -2036,25 +2000,20 @@ public class NotificationHookConsumerTest {
     }
 
     @Test
-    public void testInstanceIsActiveWithExistingExecutor() throws Exception {
+    public void testNotificationProcessorRunModeStartsConsumers() throws Exception {
+        // NOTIFICATION_PROCESSOR is the dedicated run mode for hook consumers.
         NotificationHookConsumer consumer = createTestConsumer();
 
-        // Set up existing executor
-        Field executorsField = NotificationHookConsumer.class.getDeclaredField("executors");
-        executorsField.setAccessible(true);
-        executorsField.set(consumer, mock(ExecutorService.class));
-
-        when(configuration.getBoolean(HAConfiguration.ATLAS_SERVER_HA_ENABLED_KEY, false)).thenReturn(true);
         when(configuration.getInt(NotificationHookConsumer.CONSUMER_THREADS_PROPERTY, 1)).thenReturn(1);
 
         List<NotificationConsumer<Object>> consumers = new ArrayList<>();
         consumers.add(mock(NotificationConsumer.class));
         when(notificationInterface.createConsumers(NotificationType.HOOK, 1)).thenReturn(consumers);
 
-        consumer.instanceIsActive();
+        consumer.startInternal(AtlasRunMode.NOTIFICATION_PROCESSOR, executorService);
 
-        // Should not create new executor
-        assertNotNull(executorsField.get(consumer));
+        verify(notificationInterface).createConsumers(NotificationType.HOOK, 1);
+        verify(executorService).submit(any(NotificationHookConsumer.HookConsumer.class));
     }
 
     @Test
