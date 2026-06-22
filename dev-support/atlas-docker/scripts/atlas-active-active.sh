@@ -100,6 +100,9 @@ if [ "${RUN_MODE}" = "METADATA_SERVER" ] || [ "${RUN_MODE}" = "MONOLITHIC" ]; th
     ensure_prop "atlas.authn.header.username" "x-awc-username"
     ensure_prop "atlas.authn.header.roles" "x-awc-roles"
     ensure_prop "atlas.authn.header.requestid" "x-awc-requestid"
+    # Active-active round-robin uses stateless auth headers; disable CSRF token
+    # enforcement to avoid session-bound token mismatches across replicas.
+    ensure_prop "atlas.rest-csrf.enabled" "false"
 fi
 
 # ---------------------------------------------------------------------------
@@ -140,16 +143,26 @@ if [ "${RUN_MODE}" = "INITIALIZER" ]; then
             echo "[initializer] Initialization complete — store is ready for peer nodes."
             exit 0
         fi
-        # atlas_start.py exited — do a final check before giving up
+
+        # atlas_start.py exited (HTTP was ready) — that is expected.
+        # The JVM may still be running and applying patches/types.
+        # Keep waiting as long as the Atlas JVM process is alive.
         if ! kill -0 "${ATLAS_START_PID}" 2>/dev/null; then
-            if grep -rl "initialization complete, exiting" "${ATLAS_HOME}/logs/" > /dev/null 2>&1; then
-                echo "[initializer] Initialization complete — store is ready for peer nodes."
-                exit 0
-            else
-                echo "[initializer][ERROR] atlas_start.py exited before initialization completed." >&2
-                exit 1
+            # Find the Atlas JVM process
+            ATLAS_JVM_PID=$(ps -ef | grep -v grep | grep "org.apache.atlas.Atlas" | awk '{print $2}' | head -1)
+            if [ -z "${ATLAS_JVM_PID}" ]; then
+                # JVM also gone — do one final sentinel check
+                if grep -rl "initialization complete, exiting" "${ATLAS_HOME}/logs/" > /dev/null 2>&1; then
+                    echo "[initializer] Initialization complete — store is ready for peer nodes."
+                    exit 0
+                else
+                    echo "[initializer][ERROR] Atlas JVM exited before initialization completed." >&2
+                    exit 1
+                fi
             fi
+            # JVM still alive — keep polling (atlas_start.py exit is normal after HTTP is up)
         fi
+
         sleep 10
         ELAPSED=$((ELAPSED + 10))
         echo "[initializer] Initializing… (${ELAPSED}s / ${MAX_WAIT}s)"
