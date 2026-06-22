@@ -84,3 +84,203 @@ Docker files in this folder create docker images and run them to build Apache At
    Apache Atlas will be installed at /opt/atlas/, and logs are at /var/log/atlas directory.
 
 7. Atlas Admin can be accessed at http://localhost:21000 (admin/atlasR0cks!)
+
+## Atlas Active-Active
+
+Use this sequence to build and start Atlas in active-active mode.
+
+### Startup scripts and sequence for Active-Active
+
+#### Step 1 — Build base image
+
+```shell
+# from the Atlas repository root
+cd dev-support/atlas-docker
+
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
+docker compose -f docker-compose.atlas-base.yml build
+```
+
+#### Step 2 — Build Atlas from source (~30-60 min)
+
+```shell
+mkdir -p ${HOME}/.m2
+docker compose -f docker-compose.atlas-build.yml up
+```
+
+#### Step 3 — Start infrastructure
+
+```shell
+docker compose -f docker-compose.atlas-active-active.yml up -d \
+  atlas-zk atlas-hadoop atlas-kafka atlas-solr atlas-backend
+
+docker compose -f docker-compose.atlas-active-active.yml logs -f atlas-backend
+```
+
+Wait for: `HBase Master started (PID=...)`
+
+#### Step 4 — Run initializer (one-shot)
+
+```shell
+docker compose -f docker-compose.atlas-active-active.yml up -d atlas-initializer
+
+docker logs -f atlas-initializer
+```
+
+Wait for: `Initialization complete — store is ready for peer nodes.`
+
+Verify:
+
+```shell
+docker inspect atlas-initializer --format '{{.State.Status}} exitCode={{.State.ExitCode}}'
+# expected: exited exitCode=0
+```
+
+#### Step 5 — Start Atlas servers
+
+```shell
+docker compose -f docker-compose.atlas-active-active.yml up -d \
+  atlas-metadata-server atlas-notification-proc atlas-lb \
+  atlas-db atlas-hive
+```
+
+Verify:
+
+```shell
+docker compose -f docker-compose.atlas-active-active.yml ps
+curl -s http://localhost:21000/api/atlas/admin/status
+```
+
+### Docker commands
+
+```shell
+docker exec -it <container> bash
+docker logs -f <container>
+docker inspect <container> --format '{{.State.Status}} exitCode={{.State.ExitCode}}'
+docker cp <container>:<src_path> <local_dest_path> 2>/dev/null
+```
+
+Find IP addresses of notification processor containers:
+
+```shell
+docker inspect -f '{{.Name}} {{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+  atlas-docker-atlas-notification-proc-1 atlas-docker-atlas-notification-proc-2
+```
+
+Check Kafka groups/consumers:
+
+```shell
+docker exec -it atlas-kafka bash
+/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --list
+/opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group atlas
+```
+
+### Containers
+
+Initializer:
+
+```text
+atlas-initializer
+```
+
+Metadata servers:
+
+```text
+atlas-docker-atlas-metadata-server-1
+atlas-docker-atlas-metadata-server-2
+```
+
+Notification processors:
+
+```text
+atlas-docker-atlas-notification-proc-1
+atlas-docker-atlas-notification-proc-2
+```
+
+Kafka:
+
+```shell
+docker exec -it atlas-kafka bash
+```
+
+Hive:
+
+```shell
+docker exec -it atlas-hive bash
+```
+
+Logs path inside Atlas container:
+
+```text
+/opt/atlas/logs/
+```
+
+Atlas LB URL:
+
+```text
+http://localhost:21000
+```
+
+### Troubleshooting
+
+#### Quick health checklist
+
+Run these first for a quick environment sanity check:
+
+```shell
+docker compose -f docker-compose.atlas-active-active.yml ps
+curl -s http://localhost:21000/api/atlas/admin/status
+docker inspect atlas-initializer --format '{{.State.Status}} exitCode={{.State.ExitCode}}'
+docker exec -it atlas-solr bash -lc "curl -s 'http://localhost:8983/solr/admin/cores?action=STATUS&wt=json'"
+docker exec -it atlas-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group atlas
+```
+
+#### Initializer timeout
+
+If `atlas-initializer` appears to hang or exits before completion:
+
+```shell
+docker logs -f atlas-initializer
+docker inspect atlas-initializer --format '{{.State.Status}} exitCode={{.State.ExitCode}}'
+```
+
+Expected final state:
+
+```text
+exited exitCode=0
+```
+
+If it repeatedly fails, restart only the initializer:
+
+```shell
+docker compose -f docker-compose.atlas-active-active.yml up -d --force-recreate atlas-initializer
+```
+
+#### CSRF popup in UI
+
+If UI requests fail with:
+
+```text
+Missing header or invalid Header value for CSRF Vulnerability Protection
+```
+
+verify CSRF setting in Atlas config:
+
+```shell
+docker exec -it atlas-docker-atlas-metadata-server-1 bash -lc "grep '^atlas.rest-csrf.enabled=' /opt/atlas/conf/atlas-application.properties"
+```
+
+For stateless active-active testing, CSRF is typically disabled:
+
+```text
+atlas.rest-csrf.enabled=false
+```
+
+After config changes, recreate metadata servers and LB:
+
+```shell
+docker compose -f docker-compose.atlas-active-active.yml up -d --force-recreate atlas-metadata-server atlas-lb
+```
+
+In active-active mode, ensure FQDN aliases resolve for backend services (`atlas-hbase.example.com`, `atlas-kafka.example.com`, `atlas-solr.example.com`, `atlas-zk.example.com`) in the compose network.
