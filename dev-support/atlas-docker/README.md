@@ -91,6 +91,24 @@ Use this sequence to build and start Atlas in active-active mode.
 
 ### Startup scripts and sequence for Active-Active
 
+
+#### Step 0 — Load Active-Active environment overrides
+
+Use `./.env.active-active` to set active-active specific values such as
+metadata/notification replica counts and LB port.
+
+```shell
+# from dev-support/atlas-docker
+cat .env.active-active >> .env
+```
+
+Alternative (without editing `.env`):
+
+```shell
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml up -d
+```
+
 #### Step 1 — Build base image
 
 ```shell
