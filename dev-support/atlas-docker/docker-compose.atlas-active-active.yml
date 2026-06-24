@@ -115,7 +115,9 @@ services:
   #   docker compose -f docker-compose.atlas-active-active.yml up -d atlas-db atlas-hive
   # --------------------------------------------------------------------------
 
-  # Postgres — Hive metastore database (not the Atlas graph backend).
+  # Postgres service:
+  # - always used by Hive metastore
+  # - used by Atlas graph/audit too when ATLAS_BACKEND=postgres
   atlas-db:
     extends:
       service: atlas-db
@@ -149,12 +151,18 @@ services:
       - ATLAS_BACKEND
       - ATLAS_SERVER_JAVA_VERSION
       - ATLAS_VERSION
+      - ATLAS_REBUILD_INDEX
+      - ATLAS_UPDATE_COMPOSITE_INDEX_STATUS
       - RUN_MODE=INITIALIZER
     volumes:
       - ./data:/home/atlas/data
       - atlas-initializer-home:/opt/atlas/data
+      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties:ro
+      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties:ro
     depends_on:
       atlas-backend:
+        condition: service_healthy
+      atlas-db:
         condition: service_healthy
       atlas-kafka:
         condition: service_started
@@ -170,17 +178,25 @@ services:
   # ==========================================================================
   atlas-metadata-server:
     <<: *atlas-build
-    hostname: atlas-metadata-server.example.com
+    # Keep default per-container hostname for scaled replicas so Atlas node IDs
+    # and typedef-sync consumer groups are unique on each instance.
     environment:
       - ATLAS_BACKEND
       - ATLAS_SERVER_JAVA_VERSION
       - ATLAS_VERSION
+      - ATLAS_REBUILD_INDEX
+      - ATLAS_UPDATE_COMPOSITE_INDEX_STATUS
+      - ATLAS_INDEX_RECOVERY_ENABLE
       - RUN_MODE=METADATA_SERVER
     volumes:
       - ./data:/home/atlas/data
       - atlas-metadata-server-home:/opt/atlas/data
+      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties:ro
+      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties:ro
     depends_on:
       atlas-backend:
+        condition: service_healthy
+      atlas-db:
         condition: service_healthy
       atlas-kafka:
         condition: service_started
@@ -211,17 +227,24 @@ services:
   # ==========================================================================
   atlas-notification-proc:
     <<: *atlas-build
-    hostname: atlas-notification-proc.example.com
+    # Keep default per-container hostname for scaled replicas so Atlas node IDs
+    # and consumer groups are unique on each instance.
     environment:
       - ATLAS_BACKEND
       - ATLAS_SERVER_JAVA_VERSION
       - ATLAS_VERSION
+      - ATLAS_REBUILD_INDEX
+      - ATLAS_UPDATE_COMPOSITE_INDEX_STATUS
       - RUN_MODE=NOTIFICATION_PROCESSOR
     volumes:
       - ./data:/home/atlas/data
       - atlas-notification-proc-home:/opt/atlas/data
+      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties:ro
+      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties:ro
     depends_on:
       atlas-backend:
+        condition: service_healthy
+      atlas-db:
         condition: service_healthy
       atlas-kafka:
         condition: service_started

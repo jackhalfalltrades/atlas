@@ -21,6 +21,9 @@
 RUN_MODE="${RUN_MODE:-MONOLITHIC}"
 ATLAS_HOME="${ATLAS_HOME:-/opt/atlas}"
 PROPS="${ATLAS_HOME}/conf/atlas-application.properties"
+ATLAS_REBUILD_INDEX="${ATLAS_REBUILD_INDEX:-false}"
+ATLAS_UPDATE_COMPOSITE_INDEX_STATUS="${ATLAS_UPDATE_COMPOSITE_INDEX_STATUS:-true}"
+ATLAS_INDEX_RECOVERY_ENABLE="${ATLAS_INDEX_RECOVERY_ENABLE:-true}"
 # Sentinel lives in /opt/atlas/data (the named volume mount point) so it
 # persists across container restarts without shadowing the full installation.
 SENTINEL="${ATLAS_HOME}/data/.setupDone"
@@ -29,19 +32,22 @@ echo "============================================================"
 echo " Atlas Active-Active startup"
 echo " RUN_MODE          = ${RUN_MODE}"
 echo " ATLAS_HOME        = ${ATLAS_HOME}"
-echo " ATLAS_BACKEND     = ${ATLAS_BACKEND:-hbase}"
 echo " ATLAS_VERSION     = ${ATLAS_VERSION:-unknown}"
+echo " ATLAS_REBUILD_INDEX = ${ATLAS_REBUILD_INDEX}"
+echo " ATLAS_UPDATE_COMPOSITE_INDEX_STATUS = ${ATLAS_UPDATE_COMPOSITE_INDEX_STATUS}"
+echo " ATLAS_INDEX_RECOVERY_ENABLE = ${ATLAS_INDEX_RECOVERY_ENABLE}"
 echo "============================================================"
+
+remove_prop() {
+    key="$1"
+    awk -F= -v k="${key}" '$1 != k' "${PROPS}" > "${PROPS}.tmp" && mv "${PROPS}.tmp" "${PROPS}"
+}
 
 ensure_prop() {
     key="$1"
     value="$2"
-
-    if grep -q "^${key}=" "${PROPS}"; then
-        sed -i "s|^${key}=.*|${key}=${value}|" "${PROPS}"
-    else
-        printf "\n%s=%s\n" "${key}" "${value}" >> "${PROPS}"
-    fi
+    remove_prop "${key}"
+    printf "\n%s=%s\n" "${key}" "${value}" >> "${PROPS}"
 }
 
 # ---------------------------------------------------------------------------
@@ -52,21 +58,6 @@ if [ ! -f "${SENTINEL}" ]; then
 
     encryptedPwd=$(${ATLAS_HOME}/bin/cputil.py -g -u admin -p atlasR0cks! -s | tail -1)
     echo "admin=ADMIN::${encryptedPwd}" > "${ATLAS_HOME}/conf/users-credentials.properties"
-
-    if [ "${ATLAS_BACKEND:-hbase}" = "postgres" ]; then
-        sed -i "s|^atlas.graph.storage.backend=hbase2|# atlas.graph.storage.backend=hbase2|" "${PROPS}"
-        sed -i "s|atlas.EntityAuditRepository.impl=.*|# atlas.EntityAuditRepository.impl=org.apache.atlas.repository.audit.HBaseBasedAuditRepository|" "${PROPS}"
-        cat >> "${PROPS}" <<EOF
-
-atlas.graph.storage.backend=rdbms
-atlas.graph.storage.rdbms.jpa.hikari.driverClassName=org.postgresql.Driver
-atlas.graph.storage.rdbms.jpa.hikari.jdbcUrl=jdbc:postgresql://atlas-db/atlas
-atlas.graph.storage.rdbms.jpa.hikari.username=atlas
-atlas.graph.storage.rdbms.jpa.hikari.password=atlasR0cks!
-atlas.graph.storage.rdbms.jpa.hikari.maximumPoolSize=40
-atlas.EntityAuditRepository.impl=org.apache.atlas.repository.audit.rdbms.RdbmsBasedAuditRepository
-EOF
-    fi
 
     chown -R atlas:atlas "${ATLAS_HOME}/"
     touch "${SENTINEL}"
@@ -80,17 +71,27 @@ fi
 # This prevents stale .setupDone state from leaving core backend properties
 # unconfigured and breaking initializer startup.
 # ---------------------------------------------------------------------------
-ensure_prop "atlas.graph.storage.hostname" "atlas-zk.example.com:2181"
-ensure_prop "atlas.audit.hbase.zookeeper.quorum" "atlas-zk.example.com:2181"
-
-sed -i "s|^atlas.graph.index.search.solr.mode=cloud|# atlas.graph.index.search.solr.mode=cloud|" "${PROPS}"
-sed -i "s|^# *atlas.graph.index.search.solr.mode=http|atlas.graph.index.search.solr.mode=http|" "${PROPS}"
-ensure_prop "atlas.graph.index.search.solr.http-urls" "http://atlas-solr.example.com:8983/solr"
 ensure_prop "atlas.notification.embedded" "false"
 ensure_prop "atlas.kafka.bootstrap.servers" "atlas-kafka.example.com:9092"
 sed -i "/^atlas.kafka.zookeeper.connect=/d" "${PROPS}"
-ensure_prop "atlas.graph.storage.hbase.compression-algorithm" "NONE"
-ensure_prop "atlas.graph.graph.replace-instance-if-exists" "true"
+ensure_prop "atlas.rebuild.index" "${ATLAS_REBUILD_INDEX}"
+ensure_prop "atlas.update.composite.index.status" "${ATLAS_UPDATE_COMPOSITE_INDEX_STATUS}"
+if [ "${RUN_MODE}" = "METADATA_SERVER" ] || [ "${RUN_MODE}" = "MONOLITHIC" ]; then
+    ensure_prop "atlas.index.recovery.enable" "${ATLAS_INDEX_RECOVERY_ENABLE}"
+fi
+
+# Ensure each container advertises a stable, unique Atlas HA server identity.
+# This allows AtlasServerIdSelector to resolve node ID deterministically instead
+# of falling back to "node-unknown"/hostname heuristics.
+if [ "${RUN_MODE}" = "METADATA_SERVER" ] || [ "${RUN_MODE}" = "NOTIFICATION_PROCESSOR" ] || [ "${RUN_MODE}" = "MONOLITHIC" ]; then
+    ATLAS_HTTP_PORT="${ATLAS_HTTP_PORT:-21000}"
+    ATLAS_SERVER_HOST="${ATLAS_SERVER_HOST:-${HOSTNAME}}"
+    ATLAS_SERVER_ID="${ATLAS_SERVER_ID:-${ATLAS_SERVER_HOST}}"
+    ATLAS_SERVER_ID="$(printf "%s" "${ATLAS_SERVER_ID}" | tr -c '[:alnum:]_-' '_')"
+
+    ensure_prop "atlas.server.ids" "${ATLAS_SERVER_ID}"
+    ensure_prop "atlas.server.address.${ATLAS_SERVER_ID}" "${ATLAS_SERVER_HOST}:${ATLAS_HTTP_PORT}"
+fi
 
 # Header-based authentication — stateless, no session affinity needed.
 # The client passes x-awc-username/x-awc-roles/x-awc-requestid headers
@@ -119,7 +120,7 @@ fi
 # ---------------------------------------------------------------------------
 # Pass RUN_MODE to the JVM
 # ---------------------------------------------------------------------------
-export ATLAS_OPTS="${ATLAS_OPTS:-} -DRUN_MODE=${RUN_MODE}"
+export ATLAS_OPTS="${ATLAS_OPTS:-} -DRUN_MODE=${RUN_MODE} -Datlas.rebuild.index=${ATLAS_REBUILD_INDEX} -Datlas.update.composite.index.status=${ATLAS_UPDATE_COMPOSITE_INDEX_STATUS}"
 
 echo "[start] Launching Atlas (RUN_MODE=${RUN_MODE})…"
 

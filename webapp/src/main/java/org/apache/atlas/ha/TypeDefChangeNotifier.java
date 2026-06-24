@@ -30,7 +30,9 @@ import org.springframework.stereotype.Component;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 
+import java.net.InetAddress;
 import java.util.Collections;
+import java.util.UUID;
 
 /**
  * Publishes a typedef-change signal to the {@value TypeDefSyncConsumer#DEFAULT_TOPIC}
@@ -114,8 +116,16 @@ public class TypeDefChangeNotifier implements TypeDefChangeListener {
         try {
             return AtlasServerIdSelector.selectServerId(configuration);
         } catch (Exception e) {
-            String fallback = "node-" + System.getProperty("hostname", "unknown");
-            LOG.debug("TypeDefChangeNotifier: server ID not configured, using fallback '{}'", fallback);
+            LOG.debug("TypeDefChangeNotifier: server ID not configured, falling back to hostname:port");
+        }
+
+        try {
+            int port = configuration.getInt("atlas.server.http.port",
+                    configuration.getInt("atlas.server.https.port", 21000));
+            return InetAddress.getLocalHost().getHostName() + ":" + port;
+        } catch (Exception e) {
+            String fallback = "node-" + UUID.randomUUID().toString().substring(0, 8);
+            LOG.warn("TypeDefChangeNotifier: could not determine hostname, using '{}'", fallback);
             return fallback;
         }
     }
