@@ -82,28 +82,13 @@ services:
       service: atlas-hadoop
       file: docker-compose.atlas-hadoop.yml
 
-  # HBase backend (atlas-hbase extended directly — one level — to avoid the
-  # double-extends bug where Docker Compose cannot resolve a transitive
-  # depends_on through two levels of extends).
-  # Override healthcheck: the default probes only the RegionServer HTTP port
-  # which responds before /hbase/hbaseid is written to ZooKeeper.
-  # Using `hbase status` ensures ZooKeeper is fully initialised before Atlas
-  # is allowed to connect.
+  # Backend selected by ATLAS_BACKEND (hbase or postgres), matching
+  # docker-compose.atlas.yml behavior.
   atlas-backend:
     extends:
-      service: atlas-hbase
-      file: docker-compose.atlas-hbase.yml
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - >
-          su hbase -c
-          'echo status | /opt/hbase/bin/hbase shell 2>/dev/null'
-          | grep -qE '[0-9]+ servers'
-      interval: 30s
-      timeout: 30s
-      retries: 30
-      start_period: 120s
+      service: ${ATLAS_BACKEND}
+      file: docker-compose.atlas-backend.yml
+    container_name: atlas-backend
 
   atlas-kafka:
     extends:
@@ -157,8 +142,8 @@ services:
     volumes:
       - ./data:/home/atlas/data
       - atlas-initializer-home:/opt/atlas/data
-      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties:ro
-      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties:ro
+      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties
+      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties
     depends_on:
       atlas-backend:
         condition: service_healthy
@@ -191,8 +176,8 @@ services:
     volumes:
       - ./data:/home/atlas/data
       - atlas-metadata-server-home:/opt/atlas/data
-      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties:ro
-      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties:ro
+      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties
+      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties
     depends_on:
       atlas-backend:
         condition: service_healthy
@@ -239,8 +224,8 @@ services:
     volumes:
       - ./data:/home/atlas/data
       - atlas-notification-proc-home:/opt/atlas/data
-      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties:ro
-      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties:ro
+      - ./config/atlas/${ATLAS_BACKEND}/atlas-application.properties:/opt/atlas/conf/atlas-application.properties
+      - ./config/atlas/users-credentials.properties:/opt/atlas/conf/users-credentials.properties
     depends_on:
       atlas-backend:
         condition: service_healthy

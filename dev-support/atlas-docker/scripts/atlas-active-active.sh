@@ -120,7 +120,7 @@ fi
 # ---------------------------------------------------------------------------
 # Pass RUN_MODE to the JVM
 # ---------------------------------------------------------------------------
-export ATLAS_OPTS="${ATLAS_OPTS:-} -DRUN_MODE=${RUN_MODE} -Datlas.rebuild.index=${ATLAS_REBUILD_INDEX} -Datlas.update.composite.index.status=${ATLAS_UPDATE_COMPOSITE_INDEX_STATUS}"
+export ATLAS_OPTS="${ATLAS_OPTS:-} -DRUN_MODE=${RUN_MODE}"
 
 echo "[start] Launching Atlas (RUN_MODE=${RUN_MODE})…"
 

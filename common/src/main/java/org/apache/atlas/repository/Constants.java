@@ -108,6 +108,8 @@ public final class Constants {
     public static final String PATCH_TYPE_PROPERTY_KEY        = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "patch.type");
     public static final String PATCH_ACTION_PROPERTY_KEY      = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "patch.action");
     public static final String PATCH_STATE_PROPERTY_KEY       = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "patch.state");
+    public static final String PATCH_APPLIED_BY_PROPERTY_KEY  = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "patch.appliedBy");
+    public static final String PATCH_APPLIED_AT_PROPERTY_KEY  = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "patch.appliedAt");
     /**
      * The homeId field is used when saving into Atlas a copy of an object that is being imported from another
      * repository. The homeId will be set to a String that identifies the other repository. The specific format

@@ -47,6 +47,7 @@ public class AtlasPatchManager {
     private final GraphBackedSearchIndexer indexer;
     private final EntityGraphMapper        entityGraphMapper;
     private       PatchContext             context;
+    private final Object                   initLock = new Object();
 
     @Inject
     public AtlasPatchManager(AtlasGraph atlasGraph, AtlasTypeRegistry typeRegistry, GraphBackedSearchIndexer indexer, EntityGraphMapper entityGraphMapper) {
@@ -57,13 +58,14 @@ public class AtlasPatchManager {
     }
 
     public AtlasPatches getAllPatches() {
+        initIfNeeded();
         return context.getPatchRegistry().getAllPatches();
     }
 
     public void applyAll() {
         LOG.info("==> AtlasPatchManager.applyAll()");
 
-        init();
+        initIfNeeded();
 
         try {
             for (AtlasPatchHandler handler : handlers) {
@@ -99,6 +101,7 @@ public class AtlasPatchManager {
         LOG.info("==> AtlasPatchManager.init()");
 
         this.context = new PatchContext(atlasGraph, typeRegistry, indexer, entityGraphMapper);
+        this.handlers.clear();
 
         // register all java patches here
         handlers.add(new UniqueAttributePatch(context));
@@ -114,5 +117,17 @@ public class AtlasPatchManager {
         handlers.add(new ReplaceHugeSparkProcessAttributesPatch(context));
 
         LOG.info("<== AtlasPatchManager.init()");
+    }
+
+    private void initIfNeeded() {
+        if (context != null) {
+            return;
+        }
+
+        synchronized (initLock) {
+            if (context == null) {
+                init();
+            }
+        }
     }
 }

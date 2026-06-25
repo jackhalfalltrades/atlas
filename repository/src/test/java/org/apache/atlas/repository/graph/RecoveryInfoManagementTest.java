@@ -30,6 +30,8 @@ import org.testng.annotations.Guice;
 import org.testng.annotations.Test;
 
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertTrue;
 
 @Guice(modules = TestModules.TestOnlyModule.class)
 public class RecoveryInfoManagementTest extends AtlasTestBase {
@@ -62,5 +64,18 @@ public class RecoveryInfoManagementTest extends AtlasTestBase {
         long storedTime = rm.getStartTime();
 
         assertEquals(now, storedTime);
+    }
+
+    @Test
+    public void verifyOwnershipClaimAndRelease() {
+        IndexRecoveryService.RecoveryInfoManagement rm = new IndexRecoveryService.RecoveryInfoManagement(atlasGraph);
+
+        assertTrue(rm.tryClaimOwnership("node-1", 60_000));
+        assertFalse(rm.tryClaimOwnership("node-2", 60_000));
+        assertTrue(rm.tryClaimOwnership("node-1", 60_000));
+
+        rm.releaseOwnership("node-1");
+
+        assertTrue(rm.tryClaimOwnership("node-2", 60_000));
     }
 }

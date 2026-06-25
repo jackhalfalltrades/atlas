@@ -41,12 +41,16 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.APPLIED;
 import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.FAILED;
+import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.NOT_APPLIED;
 import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.UNKNOWN;
 import static org.apache.atlas.repository.Constants.CREATED_BY_KEY;
 import static org.apache.atlas.repository.Constants.MODIFICATION_TIMESTAMP_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.MODIFIED_BY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_ACTION_PROPERTY_KEY;
+import static org.apache.atlas.repository.Constants.PATCH_APPLIED_AT_PROPERTY_KEY;
+import static org.apache.atlas.repository.Constants.PATCH_APPLIED_BY_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_DESCRIPTION_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_ID_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_STATE_PROPERTY_KEY;
@@ -87,7 +91,7 @@ public class AtlasPatchRegistry {
 
         PatchStatus status = patchNameStatusMap.get(patchId);
 
-        return status == FAILED || status == UNKNOWN;
+        return status == FAILED || status == UNKNOWN || status == NOT_APPLIED;
     }
 
     public PatchStatus getStatus(String id) {
@@ -103,10 +107,18 @@ public class AtlasPatchRegistry {
             AtlasVertex patchVertex = findByPatchId(patchId);
 
             if (patchVertex != null) {
+                long   requestTime = RequestContext.get().getRequestTime();
+                String currentUser = getCurrentUser();
+
                 setEncodedProperty(patchVertex, PATCH_STATE_PROPERTY_KEY, patchStatus.toString());
-                setEncodedProperty(patchVertex, MODIFICATION_TIMESTAMP_PROPERTY_KEY, RequestContext.get().getRequestTime());
-                setEncodedProperty(patchVertex, MODIFIED_BY_KEY, getCurrentUser());
+                setEncodedProperty(patchVertex, MODIFICATION_TIMESTAMP_PROPERTY_KEY, requestTime);
+                setEncodedProperty(patchVertex, MODIFIED_BY_KEY, currentUser);
                 setEncodedProperty(patchVertex, PATCH_STATE_PROPERTY_KEY, patchStatus.toString());
+
+                if (patchStatus == APPLIED) {
+                    setEncodedProperty(patchVertex, PATCH_APPLIED_BY_PROPERTY_KEY, currentUser);
+                    setEncodedProperty(patchVertex, PATCH_APPLIED_AT_PROPERTY_KEY, requestTime);
+                }
             }
         } finally {
             graph.commit();
@@ -217,8 +229,11 @@ public class AtlasPatchRegistry {
         ret.setAction(getEncodedProperty(vertex, PATCH_ACTION_PROPERTY_KEY, String.class));
         ret.setCreatedBy(getEncodedProperty(vertex, CREATED_BY_KEY, String.class));
         ret.setUpdatedBy(getEncodedProperty(vertex, MODIFIED_BY_KEY, String.class));
+        ret.setAppliedBy(getEncodedProperty(vertex, PATCH_APPLIED_BY_PROPERTY_KEY, String.class));
         ret.setCreatedTime(getEncodedProperty(vertex, TIMESTAMP_PROPERTY_KEY, Long.class));
         ret.setUpdatedTime(getEncodedProperty(vertex, MODIFICATION_TIMESTAMP_PROPERTY_KEY, Long.class));
+        Long appliedAt = getEncodedProperty(vertex, PATCH_APPLIED_AT_PROPERTY_KEY, Long.class);
+        ret.setAppliedAt(appliedAt == null ? 0L : appliedAt);
         ret.setStatus(getPatchStatus(vertex));
 
         return ret;
@@ -227,6 +242,14 @@ public class AtlasPatchRegistry {
     private static PatchStatus getPatchStatus(AtlasVertex vertex) {
         String patchStatus = AtlasGraphUtilsV2.getEncodedProperty(vertex, PATCH_STATE_PROPERTY_KEY, String.class);
 
-        return patchStatus != null ? PatchStatus.valueOf(patchStatus) : UNKNOWN;
+        if (patchStatus == null) {
+            return UNKNOWN;
+        }
+
+        try {
+            return PatchStatus.valueOf(patchStatus);
+        } catch (IllegalArgumentException ex) {
+            return UNKNOWN;
+        }
     }
 }
