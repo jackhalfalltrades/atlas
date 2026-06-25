@@ -132,8 +132,18 @@ public class EmbeddedServer {
     }
 
     private void auditServerStatus() {
-        auditService = BeanUtil.getBean(AtlasAuditService.class);
-        serviceState = BeanUtil.getBean(ServiceState.class);
+        try {
+            auditService = BeanUtil.getBean(AtlasAuditService.class);
+            serviceState = BeanUtil.getBean(ServiceState.class);
+        } catch (RuntimeException e) {
+            LOG.warn("Skipping server-start audit: Spring context is not ready", e);
+            return;
+        }
+
+        if (auditService == null || serviceState == null) {
+            LOG.warn("Skipping server-start audit: required beans are unavailable");
+            return;
+        }
 
         ServiceState.ServiceStateValue serviceStateValue = serviceState.getState();
 

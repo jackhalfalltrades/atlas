@@ -78,4 +78,16 @@ public class RecoveryInfoManagementTest extends AtlasTestBase {
 
         assertTrue(rm.tryClaimOwnership("node-2", 60_000));
     }
+
+    @Test
+    public void verifyOnlyOwnerCanReleaseOwnership() {
+        IndexRecoveryService.RecoveryInfoManagement rm = new IndexRecoveryService.RecoveryInfoManagement(atlasGraph);
+
+        assertTrue(rm.tryClaimOwnership("node-1", 60_000));
+
+        rm.releaseOwnership("node-2");
+
+        assertFalse(rm.tryClaimOwnership("node-2", 60_000));
+        assertTrue(rm.tryClaimOwnership("node-1", 60_000));
+    }
 }

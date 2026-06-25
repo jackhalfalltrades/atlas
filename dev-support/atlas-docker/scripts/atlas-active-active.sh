@@ -21,6 +21,8 @@
 RUN_MODE="${RUN_MODE:-MONOLITHIC}"
 ATLAS_HOME="${ATLAS_HOME:-/opt/atlas}"
 PROPS="${ATLAS_HOME}/conf/atlas-application.properties"
+COMMON_PROPS="${ATLAS_HOME}/conf/atlas-application-common.properties"
+BACKEND_PROPS="${ATLAS_HOME}/conf/atlas-application-backend.properties"
 ATLAS_REBUILD_INDEX="${ATLAS_REBUILD_INDEX:-false}"
 ATLAS_UPDATE_COMPOSITE_INDEX_STATUS="${ATLAS_UPDATE_COMPOSITE_INDEX_STATUS:-true}"
 ATLAS_INDEX_RECOVERY_ENABLE="${ATLAS_INDEX_RECOVERY_ENABLE:-true}"
@@ -64,6 +66,20 @@ if [ ! -f "${SENTINEL}" ]; then
     echo "[setup] Done — sentinel written to ${SENTINEL}"
 else
     echo "[setup] Already configured (sentinel exists), skipping."
+fi
+
+# ---------------------------------------------------------------------------
+# Build runtime atlas-application.properties from active-active layered files:
+#   1) common properties
+#   2) backend-specific overrides (hbase/postgres)
+# This is active-active specific and avoids mutating bind-mounted source files.
+# ---------------------------------------------------------------------------
+if [ -f "${COMMON_PROPS}" ] && [ -f "${BACKEND_PROPS}" ]; then
+    cat "${COMMON_PROPS}" "${BACKEND_PROPS}" > "${PROPS}"
+else
+    echo "[error] Missing layered active-active config files." >&2
+    echo "[error] Expected: ${COMMON_PROPS} and ${BACKEND_PROPS}" >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------

@@ -220,7 +220,7 @@ public class IndexRecoveryService implements Service, ActiveStateChangeHandler, 
 
                     if (!hasOwnership) {
                         if (this.txRecoveryObject != null) {
-                            stopMonitoring();
+                            stopMonitoringAfterOwnershipLoss();
                         }
 
                         Thread.sleep(indexStatusCheckRetryMillis);
@@ -232,7 +232,7 @@ public class IndexRecoveryService implements Service, ActiveStateChangeHandler, 
 
                     if (!stillOwnsRecovery) {
                         if (this.txRecoveryObject != null) {
-                            stopMonitoring();
+                            stopMonitoringAfterOwnershipLoss();
                         }
                         continue;
                     }
@@ -313,6 +313,12 @@ public class IndexRecoveryService implements Service, ActiveStateChangeHandler, 
 
         private void stopMonitoring() {
             stopIndexRecoveryAndUpdateStartTime();
+        }
+
+        private void stopMonitoringAfterOwnershipLoss() {
+            LOG.info("Index Recovery: ownership lost by {}, stopping local recovery handle without updating startTime",
+                    ownerId);
+            stopIndexRecovery();
         }
 
         private void stopIndexRecoveryAndUpdateStartTime() {

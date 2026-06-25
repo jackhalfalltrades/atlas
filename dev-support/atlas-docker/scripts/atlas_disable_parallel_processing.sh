@@ -6,7 +6,7 @@ cd "$WORKDIR"
 for cid in $(docker compose -f "$COMPOSE_FILE" ps -q atlas-notification-proc); do
   echo "Updating $cid ..."
   docker exec "$cid" bash -lc '
-    PROPS=/opt/atlas/conf/atlas-application.properties
+    PROPS=/opt/atlas/conf/atlas-atlas-application.properties
     upsert() {
       k="$1"; v="$2"
       if grep -q "^${k}=" "$PROPS"; then
