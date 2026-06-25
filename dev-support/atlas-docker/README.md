@@ -49,37 +49,37 @@ Docker files in this folder create docker images and run them to build Apache At
    Atlas server configuration is mounted from `config/atlas/${ATLAS_BACKEND}/atlas-application.properties`.
    The file authentication credentials are mounted from `config/atlas/users-credentials.properties`.
 
-   1. Build atlas-base image with the following command:
+    1. Build atlas-base image with the following command:
 
-      ```shell
-      docker compose -f docker-compose.atlas-base.yml build
-      ```
+       ```shell
+       docker compose -f docker-compose.atlas-base.yml build
+       ```
 
-   2. Ensure that the `${HOME}/.m2` directory exists and execute following command to build Apache Atlas:
+    2. Ensure that the `${HOME}/.m2` directory exists and execute following command to build Apache Atlas:
 
-      ```shell
-      mkdir -p ${HOME}/.m2
-      docker compose -f docker-compose.atlas-build.yml up
-      ```
+       ```shell
+       mkdir -p ${HOME}/.m2
+       docker compose -f docker-compose.atlas-build.yml up
+       ```
 
    Time taken to complete the build might vary (upto an hour), depending on status of ${HOME}/.m2 directory cache.
 
-   3. To install and start Atlas using Postgres as backend store, execute following commands:
+    3. To install and start Atlas using Postgres as backend store, execute following commands:
 
-      ```shell
-      export ATLAS_BACKEND=postgres
-      docker compose -f docker-compose.atlas.yml -f docker-compose.atlas-postgres.yml up -d --wait
-      ```
+       ```shell
+       export ATLAS_BACKEND=postgres
+       docker compose -f docker-compose.atlas.yml -f docker-compose.atlas-postgres.yml up -d --wait
+       ```
 
-      The Postgres overlay runs `config/init_postgres.sh` as a one-shot initialization service before Atlas starts.
-      This creates the required roles, databases, and Atlas RDBMS schema.
+       The Postgres overlay runs `config/init_postgres.sh` as a one-shot initialization service before Atlas starts.
+       This creates the required roles, databases, and Atlas RDBMS schema.
 
-   4. To install and start Atlas using HBase as backend store, execute following commands:
+    4. To install and start Atlas using HBase as backend store, execute following commands:
 
-      ```shell
-      export ATLAS_BACKEND=hbase
-      docker compose -f docker-compose.atlas.yml -f docker-compose.atlas-hadoop.yml up -d --wait
-      ```
+       ```shell
+       export ATLAS_BACKEND=hbase
+       docker compose -f docker-compose.atlas.yml -f docker-compose.atlas-hadoop.yml up -d --wait
+       ```
 
    Apache Atlas will be installed at /opt/atlas/, and logs are at /var/log/atlas directory.
 
@@ -87,88 +87,142 @@ Docker files in this folder create docker images and run them to build Apache At
 
 ## Atlas Active-Active
 
-Use this sequence to build and start Atlas in active-active mode.
+Use this section when running Atlas in active-active mode (initializer + metadata
+servers + notification processors + LB).
 
-### Startup scripts and sequence for Active-Active
+### Active-Active configuration model
 
+Active-active uses layered properties files:
 
-#### Step 0 — Load Active-Active environment overrides
+- Common properties: `config/atlas/active-active/common/atlas-application.properties`
+- HBase backend overrides: `config/atlas/active-active/hbase/atlas-application.properties`
+- Postgres backend overrides: `config/atlas/active-active/postgres/atlas-application.properties`
 
-Use `./.env.active-active` to set active-active specific values such as
-metadata/notification replica counts and LB port.
+At container startup, `scripts/atlas-active-active.sh` combines common + backend
+files into runtime `/opt/atlas/conf/atlas-application.properties`, then applies
+run-mode specific runtime properties (for example, recovery toggle and HA node id).
 
-```shell
-# from dev-support/atlas-docker
-cat .env.active-active >> .env
-```
+### Prerequisites (one-time or when code changes)
 
-Alternative (without editing `.env`):
-
-```shell
-docker compose --env-file .env --env-file .env.active-active \
-  -f docker-compose.atlas-active-active.yml up -d
-```
-
-#### Step 1 — Build base image
+Run from `dev-support/atlas-docker`:
 
 ```shell
-# from the Atlas repository root
-cd dev-support/atlas-docker
-
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
-docker compose -f docker-compose.atlas-base.yml build
-```
 
-#### Step 2 — Build Atlas from source (~30-60 min)
+# Build base image if missing/outdated
+docker compose -f docker-compose.atlas-base.yml build atlas-base
 
-```shell
+# Build Atlas distro if needed
 mkdir -p ${HOME}/.m2
 docker compose -f docker-compose.atlas-build.yml up
 ```
 
-#### Step 3 — Start infrastructure
+### Startup: Active-Active with HBase backend
+
+Recommended (scripted):
 
 ```shell
-docker compose -f docker-compose.atlas-active-active.yml up -d \
-  atlas-zk atlas-hadoop atlas-kafka atlas-solr atlas-backend
-
-docker compose -f docker-compose.atlas-active-active.yml logs -f atlas-backend
+# from dev-support/atlas-docker
+./scripts/atlas-start-active-active-hbase.sh
 ```
 
-Wait for: `HBase Master started (PID=...)`
+What the script does:
 
-#### Step 4 — Run initializer (one-shot)
+1. Sets `ATLAS_BACKEND=hbase` in `.env.active-active`
+2. Starts infra (`atlas-hadoop`, `atlas-zk`, `atlas-kafka`, `atlas-solr`, `atlas-backend`, `atlas-db`)
+3. Runs one-shot `atlas-initializer`
+4. Starts metadata + notification replicas and LB
+
+Manual equivalent:
 
 ```shell
-docker compose -f docker-compose.atlas-active-active.yml up -d atlas-initializer
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml up -d \
+  atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
 
-docker logs -f atlas-initializer
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml up -d --force-recreate atlas-initializer
+
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml up -d --force-recreate \
+  --scale atlas-metadata-server=2 --scale atlas-notification-proc=2 \
+  atlas-metadata-server atlas-notification-proc atlas-lb
 ```
 
-Wait for: `Initialization complete — store is ready for peer nodes.`
+### Startup: Active-Active with Postgres backend
 
-Verify:
+Recommended (scripted):
 
 ```shell
-docker inspect atlas-initializer --format '{{.State.Status}} exitCode={{.State.ExitCode}}'
-# expected: exited exitCode=0
+# from dev-support/atlas-docker
+./scripts/atlas-start-active-active-postgres.sh
 ```
 
-#### Step 5 — Start Atlas servers
+What the script does:
+
+1. Sets `ATLAS_BACKEND=postgres` in `.env.active-active`
+2. Starts infra using:
+    - `docker-compose.atlas-active-active.yml`
+    - `docker-compose.atlas-active-active-postgres.yml`
+3. Runs `atlas-db-init` one-shot service (creates roles/db/schema)
+4. Runs one-shot `atlas-initializer`
+5. Starts metadata + notification replicas and LB
+
+Manual equivalent:
 
 ```shell
-docker compose -f docker-compose.atlas-active-active.yml up -d \
-  atlas-metadata-server atlas-notification-proc atlas-lb \
-  atlas-db atlas-hive
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml -f docker-compose.atlas-active-active-postgres.yml up -d \
+  atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
+
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml -f docker-compose.atlas-active-active-postgres.yml up -d \
+  atlas-db-init
+
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml -f docker-compose.atlas-active-active-postgres.yml up -d --force-recreate \
+  atlas-initializer
+
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml -f docker-compose.atlas-active-active-postgres.yml up -d --force-recreate \
+  --scale atlas-metadata-server=2 --scale atlas-notification-proc=2 \
+  atlas-metadata-server atlas-notification-proc atlas-lb
 ```
 
-Verify:
+### Validate startup (both backends)
 
 ```shell
 docker compose -f docker-compose.atlas-active-active.yml ps
 curl -s http://localhost:21000/api/atlas/admin/status
+docker inspect atlas-initializer --format '{{.State.Status}} exitCode={{.State.ExitCode}}'
 ```
+
+Expected:
+
+- `/api/atlas/admin/status` returns `{"Status":"ACTIVE"}`
+- `atlas-initializer` ends as `exited exitCode=0`
+- metadata server containers become `healthy`
+
+### Switching backend cleanly
+
+When switching from one backend to the other, stop active-active stack first:
+
+```shell
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml \
+  -f docker-compose.atlas-active-active-postgres.yml down
+```
+
+Optional full cleanup (fresh state):
+
+```shell
+docker compose --env-file .env --env-file .env.active-active \
+  -f docker-compose.atlas-active-active.yml \
+  -f docker-compose.atlas-active-active-postgres.yml down -v
+```
+
+Then start with the desired backend script (`hbase` or `postgres`).
 
 ### Docker commands
 
