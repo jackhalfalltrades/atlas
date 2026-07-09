@@ -136,7 +136,26 @@ fi
 # ---------------------------------------------------------------------------
 # Pass RUN_MODE to the JVM
 # ---------------------------------------------------------------------------
-export ATLAS_OPTS="${ATLAS_OPTS:-} -DRUN_MODE=${RUN_MODE}"
+JAVA_BIN="${JAVA_HOME:+${JAVA_HOME}/bin/java}"
+if [ -z "${JAVA_BIN}" ] || [ ! -x "${JAVA_BIN}" ]; then
+    JAVA_BIN="java"
+fi
+
+JAVA_MAJOR="$(${JAVA_BIN} -version 2>&1 | awk -F[\".] '/version/ {print $2}')"
+
+# Keep JVM module opens aligned with main README guidance:
+# - Java 8 / 11: no --add-opens flags
+# - Java 17: required opens for reflective access used by graph initialization
+if [ "${JAVA_MAJOR}" = "17" ]; then
+    ATLAS_JAVA_OPEN_OPTS="--add-opens=java.base/java.lang=ALL-UNNAMED \
+--add-opens=java.base/java.lang.reflect=ALL-UNNAMED \
+--add-opens=java.base/java.nio=ALL-UNNAMED \
+--add-opens=java.base/java.net=ALL-UNNAMED"
+else
+    ATLAS_JAVA_OPEN_OPTS=""
+fi
+
+export ATLAS_OPTS="${ATLAS_OPTS:-} ${ATLAS_JAVA_OPEN_OPTS} -DRUN_MODE=${RUN_MODE}"
 
 echo "[start] Launching Atlas (RUN_MODE=${RUN_MODE})…"
 

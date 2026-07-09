@@ -118,6 +118,14 @@ mkdir -p ${HOME}/.m2
 docker compose -f docker-compose.atlas-build.yml up
 ```
 
+Important:
+
+- Re-run `./download-archives.sh` whenever `.env` archive versions change
+  (for example after pulling/merging updates from `master`).
+- If versions change but `downloads/` still has old files, Docker image builds can
+  fail with errors like:
+  `COPY ./downloads/kafka_${KAFKA_SCALA_VERSION}-${KAFKA_VERSION}.tgz ... not found`.
+
 ### Startup: Active-Active with HBase backend
 
 Recommended (scripted):
@@ -328,6 +336,27 @@ If it repeatedly fails, restart only the initializer:
 ```shell
 docker compose -f docker-compose.atlas-active-active.yml up -d --force-recreate atlas-initializer
 ```
+
+#### Missing archive during docker build
+
+Symptom (example):
+
+```text
+Dockerfile.atlas-kafka: COPY ./downloads/kafka_${KAFKA_SCALA_VERSION}-${KAFKA_VERSION}.tgz ... not found
+```
+
+Cause:
+
+- `downloads/` has stale archives that do not match versions currently set in `.env`.
+
+Fix:
+
+```shell
+# from dev-support/atlas-docker
+./download-archives.sh
+```
+
+Then retry the startup script.
 
 #### CSRF popup in UI
 
