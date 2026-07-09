@@ -35,17 +35,14 @@
     <properties>
         <checkstyle.failOnViolation>true</checkstyle.failOnViolation>
         <checkstyle.skip>false</checkstyle.skip>
+        <!-- No live-stack ITs yet; avoid Failsafe/TestNG on default mvn verify (see ATLAS-5338). -->
+        <skipITs>true</skipITs>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.sun.jersey</groupId>
-            <artifactId>jersey-client</artifactId>
-            <version>1.9</version>
         </dependency>
 
         <dependency>

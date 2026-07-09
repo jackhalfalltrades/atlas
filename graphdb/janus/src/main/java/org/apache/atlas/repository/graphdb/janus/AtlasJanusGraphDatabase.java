@@ -46,15 +46,17 @@ import org.janusgraph.graphdb.database.serialize.attribute.SerializableSerialize
 import org.janusgraph.graphdb.tinkerpop.JanusGraphIoRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import sun.misc.Unsafe;
 
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
@@ -315,30 +317,34 @@ public class AtlasJanusGraphDatabase implements GraphDatabase<AtlasJanusVertex, 
         }
     }
 
-    /**
-     * Sets a {@code static final} field to a new value, compatible with Java 11 and Java 17+.
-     *
-     * <p>Java 17 removed {@code Field.class.getDeclaredField("modifiers")} — the old trick for
-     * clearing the FINAL flag no longer works.  {@code sun.misc.Unsafe} bypasses the field's
-     * access controls entirely and still works on Java 17.
-     */
-    private static void setStaticFinalField(Field field, Object value) throws Exception {
-        field.setAccessible(true);
-        Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
-        unsafeField.setAccessible(true);
-        Unsafe unsafe = (Unsafe) unsafeField.get(null);
-        unsafe.putObject(unsafe.staticFieldBase(field), unsafe.staticFieldOffset(field), value);
-    }
-
     private static void addHBase2Support() {
+        logArgs();
         try {
             Field field = StandardStoreManager.class.getDeclaredField("ALL_MANAGER_CLASSES");
+
+            field.setAccessible(true);
+
+            Method getDeclaredFields0 = Class.class.getDeclaredMethod("getDeclaredFields0", boolean.class);
+            getDeclaredFields0.setAccessible(true);
+            Field[] fields = (Field[]) getDeclaredFields0.invoke(Field.class, false);
+            Field modifiersField = null;
+            for (Field each : fields) {
+                if ("modifiers".equals(each.getName())) {
+                    modifiersField = each;
+                    break;
+                }
+            }
+
+            modifiersField.setAccessible(true);
+            modifiersField.setInt(field, field.getModifiers() & ~Modifier.FINAL);
 
             Map<String, String> customMap = new HashMap<>(StandardStoreManager.getAllManagerClasses());
 
             customMap.put("hbase2", HBaseStoreManager.class.getName());
 
-            setStaticFinalField(field, ImmutableMap.copyOf(customMap));
+            ImmutableMap<String, String> immap = ImmutableMap.copyOf(customMap);
+
+            field.set(null, immap);
 
             LOG.debug("Injected HBase2 support - {}", HBaseStoreManager.class.getName());
         } catch (Exception e) {
@@ -350,11 +356,29 @@ public class AtlasJanusGraphDatabase implements GraphDatabase<AtlasJanusVertex, 
         try {
             Field field = StandardStoreManager.class.getDeclaredField("ALL_MANAGER_CLASSES");
 
+            field.setAccessible(true);
+
+            Method getDeclaredFields0 = Class.class.getDeclaredMethod("getDeclaredFields0", boolean.class);
+            getDeclaredFields0.setAccessible(true);
+            Field[] fields = (Field[]) getDeclaredFields0.invoke(Field.class, false);
+            Field modifiersField = null;
+            for (Field each : fields) {
+                if ("modifiers".equals(each.getName())) {
+                    modifiersField = each;
+                    break;
+                }
+            }
+
+            modifiersField.setAccessible(true);
+            modifiersField.setInt(field, field.getModifiers() & ~Modifier.FINAL);
+
             Map<String, String> customMap = new HashMap<>(StandardStoreManager.getAllManagerClasses());
 
             customMap.put("rdbms", RdbmsStoreManager.class.getName());
 
-            setStaticFinalField(field, ImmutableMap.copyOf(customMap));
+            ImmutableMap<String, String> immap = ImmutableMap.copyOf(customMap);
+
+            field.set(null, immap);
 
             LOG.debug("Injected RDBMS support - {}", RdbmsStoreManager.class.getName());
         } catch (Exception e) {
@@ -366,11 +390,29 @@ public class AtlasJanusGraphDatabase implements GraphDatabase<AtlasJanusVertex, 
         try {
             Field field = StandardIndexProvider.class.getDeclaredField("ALL_MANAGER_CLASSES");
 
+            field.setAccessible(true);
+
+            Method getDeclaredFields0 = Class.class.getDeclaredMethod("getDeclaredFields0", boolean.class);
+            getDeclaredFields0.setAccessible(true);
+            Field[] fields = (Field[]) getDeclaredFields0.invoke(Field.class, false);
+            Field modifiersField = null;
+            for (Field each : fields) {
+                if ("modifiers".equals(each.getName())) {
+                    modifiersField = each;
+                    break;
+                }
+            }
+
+            modifiersField.setAccessible(true);
+            modifiersField.setInt(field, field.getModifiers() & ~Modifier.FINAL);
+
             Map<String, String> customMap = new HashMap<>(StandardIndexProvider.getAllProviderClasses());
 
             customMap.put("solr", Solr6Index.class.getName());
 
-            setStaticFinalField(field, ImmutableMap.copyOf(customMap));
+            ImmutableMap<String, String> immap = ImmutableMap.copyOf(customMap);
+
+            field.set(null, immap);
 
             LOG.debug("Injected solr6 index - {}", Solr6Index.class.getName());
         } catch (Exception e) {
@@ -382,11 +424,29 @@ public class AtlasJanusGraphDatabase implements GraphDatabase<AtlasJanusVertex, 
         try {
             Field field = StandardIndexProvider.class.getDeclaredField("ALL_MANAGER_CLASSES");
 
+            field.setAccessible(true);
+
+            Method getDeclaredFields0 = Class.class.getDeclaredMethod("getDeclaredFields0", boolean.class);
+            getDeclaredFields0.setAccessible(true);
+            Field[] fields = (Field[]) getDeclaredFields0.invoke(Field.class, false);
+            Field modifiersField = null;
+            for (Field each : fields) {
+                if ("modifiers".equals(each.getName())) {
+                    modifiersField = each;
+                    break;
+                }
+            }
+
+            modifiersField.setAccessible(true);
+            modifiersField.setInt(field, field.getModifiers() & ~Modifier.FINAL);
+
             Map<String, String> customMap = new HashMap<>(StandardIndexProvider.getAllProviderClasses());
 
             customMap.put("elasticsearch", ElasticSearch7Index.class.getName());
 
-            setStaticFinalField(field, ImmutableMap.copyOf(customMap));
+            ImmutableMap<String, String> immap = ImmutableMap.copyOf(customMap);
+
+            field.set(null, immap);
 
             LOG.debug("Injected es7 index - {}", ElasticSearch7Index.class.getName());
         } catch (Exception e) {
@@ -467,5 +527,11 @@ public class AtlasJanusGraphDatabase implements GraphDatabase<AtlasJanusVertex, 
         addSolr6Index();
 
         addElasticSearch7Index();
+    }
+
+    public static void logArgs() {
+        List<String> jvmArgs = ManagementFactory.getRuntimeMXBean().getInputArguments();
+        System.out.println("JVM Args:");
+        jvmArgs.forEach(System.out::println);
     }
 }

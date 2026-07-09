@@ -69,6 +69,22 @@ HBASE_BG_PID=$!
 sleep 10
 su -c "${HBASE_HOME}/bin/hbase-daemon.sh start regionserver" hbase
 
+HBASE_MASTER_PID=""
+for attempt in $(seq 1 60); do
+  HBASE_MASTER_PID=`ps -ef | grep -v grep | grep -i "org.apache.hadoop.hbase.master.HMaster" | awk '{print $2}'`
+
+  if [ -n "${HBASE_MASTER_PID}" ]; then
+    break
+  fi
+
+  sleep 2
+done
+
+if [ -z "${HBASE_MASTER_PID}" ]; then
+  echo "HBase HMaster failed to start" >&2
+  exit 1
+fi
+
 # Wait for the foreground master process
 wait $HBASE_BG_PID
 echo "HBase Master exited with code $?"
