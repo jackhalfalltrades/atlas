@@ -90,28 +90,6 @@ Docker files in this folder create docker images and run them to build Apache At
 Use this section when running Atlas in active-active mode (initializer + metadata
 servers + notification processors + LB).
 
-### Quick commands
-
-Run from `dev-support/atlas-docker`:
-
-```shell
-# Start active-active with HBase backend
-./scripts/atlas-start-active-active-hbase.sh
-
-# Start active-active with Postgres backend
-./scripts/atlas-start-active-active-postgres.sh
-
-# Stop active-active stack
-docker compose --env-file .env --env-file .env.active-active \
-  -f docker-compose.atlas-active-active.yml \
-  -f docker-compose.atlas-active-active-postgres.yml down
-
-# Stop and remove volumes (fresh reset)
-docker compose --env-file .env --env-file .env.active-active \
-  -f docker-compose.atlas-active-active.yml \
-  -f docker-compose.atlas-active-active-postgres.yml down -v
-```
-
 ### Active-Active configuration model
 
 Active-active uses layered properties files:
