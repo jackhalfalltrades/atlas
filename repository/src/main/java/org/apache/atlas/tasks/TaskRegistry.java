@@ -17,6 +17,8 @@
  */
 package org.apache.atlas.tasks;
 
+import com.google.common.annotations.VisibleForTesting;
+import org.apache.atlas.AtlasConfiguration;
 import org.apache.atlas.annotation.GraphTransaction;
 import org.apache.atlas.exception.AtlasBaseException;
 import org.apache.atlas.model.tasks.AtlasTask;
@@ -48,10 +50,17 @@ public class TaskRegistry {
     private static final Logger LOG = LoggerFactory.getLogger(TaskRegistry.class);
 
     private final AtlasGraph graph;
+    private final long       inProgressStaleThresholdMs;
 
     @Inject
     public TaskRegistry(AtlasGraph graph) {
+        this(graph, AtlasConfiguration.TASK_CLAIM_STALE_THRESHOLD_MS.getLong());
+    }
+
+    @VisibleForTesting
+    TaskRegistry(AtlasGraph graph, long inProgressStaleThresholdMs) {
         this.graph = graph;
+        this.inProgressStaleThresholdMs = inProgressStaleThresholdMs;
     }
 
     @GraphTransaction
@@ -158,6 +167,19 @@ public class TaskRegistry {
      */
     @GraphTransaction
     public boolean tryClaimTask(String taskGuid) {
+        // AsyncImport-style global serialization: allow claiming only when
+        // there is no task already IN_PROGRESS.
+        if (hasAnyTaskInProgress()) {
+            return false;
+        }
+
+        // Preserve FIFO order: only the oldest PENDING task is claimable.
+        // This prevents newer tasks from leapfrogging older tasks when multiple
+        // nodes race to claim tasks at startup/runtime.
+        if (!isOldestPendingTask(taskGuid)) {
+            return false;
+        }
+
         AtlasGraphQuery query = graph.query()
                 .has(Constants.TASK_TYPE_PROPERTY_KEY, Constants.TASK_TYPE_NAME)
                 .has(Constants.TASK_GUID, taskGuid)
@@ -171,12 +193,70 @@ public class TaskRegistry {
         }
 
         AtlasVertex taskVertex = results.next();
+        long        now        = System.currentTimeMillis();
 
         setEncodedProperty(taskVertex, Constants.TASK_STATUS, AtlasTask.Status.IN_PROGRESS.toString());
-        setEncodedProperty(taskVertex, Constants.TASK_UPDATED_TIME, System.currentTimeMillis());
+        setEncodedProperty(taskVertex, Constants.TASK_START_TIME, now);
+        setEncodedProperty(taskVertex, Constants.TASK_UPDATED_TIME, now);
 
         LOG.debug("TaskRegistry.tryClaimTask({}): claimed IN_PROGRESS", taskGuid);
         return true;
+    }
+
+    @GraphTransaction
+    public void recoverStaleInProgressTasks() {
+        AtlasGraphQuery query = graph.query()
+                .has(Constants.TASK_TYPE_PROPERTY_KEY, Constants.TASK_TYPE_NAME)
+                .has(Constants.TASK_STATUS, AtlasTask.Status.IN_PROGRESS.toString());
+        long now = System.currentTimeMillis();
+
+        for (AtlasVertex vertex : (Iterable<AtlasVertex>) query.vertices()) {
+            String taskGuid    = vertex.getProperty(Constants.TASK_GUID, String.class);
+            Long   updatedTime = vertex.getProperty(Constants.TASK_UPDATED_TIME, Long.class);
+
+            if (!isStaleInProgress(updatedTime, now)) {
+                continue;
+            }
+
+            LOG.warn("TaskRegistry.recoverStaleInProgressTasks(): recovering stale IN_PROGRESS task {} back to PENDING",
+                    taskGuid);
+            setEncodedProperty(vertex, Constants.TASK_STATUS, AtlasTask.Status.PENDING.toString());
+            setEncodedProperty(vertex, Constants.TASK_UPDATED_TIME, now);
+        }
+    }
+
+    private boolean hasAnyTaskInProgress() {
+        AtlasGraphQuery query = graph.query()
+                .has(Constants.TASK_TYPE_PROPERTY_KEY, Constants.TASK_TYPE_NAME)
+                .has(Constants.TASK_STATUS, AtlasTask.Status.IN_PROGRESS.toString());
+
+        return query.vertices().iterator().hasNext();
+    }
+
+    private boolean isStaleInProgress(Long updatedTime, long now) {
+        if (updatedTime == null || updatedTime <= 0L) {
+            return true;
+        }
+
+        return now - updatedTime >= inProgressStaleThresholdMs;
+    }
+
+    private boolean isOldestPendingTask(String taskGuid) {
+        AtlasGraphQuery query = graph.query()
+                .has(Constants.TASK_TYPE_PROPERTY_KEY, Constants.TASK_TYPE_NAME)
+                .has(Constants.TASK_STATUS, AtlasTask.Status.PENDING.toString())
+                .orderBy(Constants.TASK_CREATED_TIME, AtlasGraphQuery.SortOrder.ASC);
+
+        Iterator<AtlasVertex> pending = query.vertices().iterator();
+
+        if (!pending.hasNext()) {
+            return false;
+        }
+
+        AtlasVertex oldestPending = pending.next();
+        String oldestGuid = oldestPending.getProperty(Constants.TASK_GUID, String.class);
+
+        return taskGuid.equals(oldestGuid);
     }
 
     @GraphTransaction

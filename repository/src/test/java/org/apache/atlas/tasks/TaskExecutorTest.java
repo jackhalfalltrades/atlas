@@ -33,6 +33,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
@@ -126,13 +127,38 @@ public class TaskExecutorTest extends BaseTaskFixture {
         GraphClaimable<Boolean> alreadyClaimed = () -> false;
 
         TaskExecutor.TaskConsumer consumer = new TaskExecutor.TaskConsumer(
-                task, alreadyClaimed, taskRegistry, factoryMap, statistics);
+                task, alreadyClaimed, taskRegistry, factoryMap, statistics, 1, 1);
 
         consumer.run();
 
         // No work should have been counted — task was skipped
         assertEquals(statistics.getTotal(), 0,
                 "Statistics must stay at 0 when claim returns false");
+    }
+
+    @Test
+    public void taskConsumer_retriesClaim_untilClaimSucceeds() throws Exception {
+        TaskManagementTest.SpyingFactory spyingFactory = new TaskManagementTest.SpyingFactory();
+        Map<String, TaskFactory> taskFactoryMap = new HashMap<>();
+        TaskManagement.createTaskTypeFactoryMap(taskFactoryMap, spyingFactory);
+
+        AtlasTask addTask = taskManagement.createTask("add", "test", Collections.emptyMap());
+        graph.commit();
+
+        TaskManagement.Statistics statistics = new TaskManagement.Statistics();
+        AtomicInteger claimAttempts = new AtomicInteger(0);
+
+        // Simulate "wait until current task completes": first claim fails, second succeeds.
+        GraphClaimable<Boolean> delayedClaim = () -> claimAttempts.incrementAndGet() >= 2;
+
+        TaskExecutor.TaskConsumer consumer = new TaskExecutor.TaskConsumer(
+                addTask, delayedClaim, taskRegistry, taskFactoryMap, statistics, 5, 5);
+
+        consumer.run();
+
+        assertTrue(claimAttempts.get() >= 2, "TaskConsumer must retry claim before giving up");
+        assertEquals(statistics.getTotalSuccess(), 1,
+                "Task must execute after a successful retry claim");
     }
 
     @Test

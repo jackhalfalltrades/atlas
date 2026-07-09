@@ -18,6 +18,7 @@
 
 package org.apache.atlas.repository.impexp;
 
+import org.apache.atlas.AtlasConfiguration;
 import org.apache.atlas.AtlasErrorCode;
 import org.apache.atlas.SortOrder;
 import org.apache.atlas.annotation.GraphTransaction;
@@ -53,11 +54,17 @@ public class AsyncImportService implements GraphClaimable<AtlasAsyncImportReques
 
     private final DataAccess                                          dataAccess;
     private final ImportCacheManager<String, AtlasAsyncImportRequest> importCache;
+    private final long                                                processingStaleThresholdMs;
 
     @Inject
     public AsyncImportService(DataAccess dataAccess) {
+        this(dataAccess, AtlasConfiguration.ASYNC_IMPORT_CLAIM_STALE_THRESHOLD_MS.getLong());
+    }
+
+    AsyncImportService(DataAccess dataAccess, long processingStaleThresholdMs) {
         this.dataAccess  = dataAccess;
         this.importCache = new ImportCacheManager<>();
+        this.processingStaleThresholdMs = processingStaleThresholdMs;
     }
 
     public void populateCache(AtlasAsyncImportRequest importRequest) {
@@ -145,6 +152,24 @@ public class AsyncImportService implements GraphClaimable<AtlasAsyncImportReques
         return claimNextWaitingImport();
     }
 
+    @Override
+    @GraphTransaction
+    public void recoverStaleClaims() throws AtlasBaseException {
+        for (String importId : fetchInProgressImportIds()) {
+            AtlasAsyncImportRequest processingImport = loadFresh(importId);
+
+            if (processingImport == null || !ImportStatus.PROCESSING.equals(processingImport.getStatus())) {
+                continue;
+            }
+
+            if (!isStaleProcessingImport(processingImport, System.currentTimeMillis())) {
+                continue;
+            }
+
+            reclaimStaleProcessingImport(processingImport);
+        }
+    }
+
     /**
      * Atomically claims the next WAITING import for processing on this node.
      *
@@ -159,7 +184,7 @@ public class AsyncImportService implements GraphClaimable<AtlasAsyncImportReques
      */
     @GraphTransaction
     public AtlasAsyncImportRequest claimNextWaitingImport() throws AtlasBaseException {
-        if (!fetchInProgressImportIds().isEmpty()) {
+        if (hasAnyActiveProcessingImport()) {
             LOG.debug("claimNextWaitingImport(): an import is already PROCESSING globally, skipping");
             return null;
         }
@@ -198,6 +223,40 @@ public class AsyncImportService implements GraphClaimable<AtlasAsyncImportReques
 
         LOG.info("claimNextWaitingImport(): successfully claimed import {}", importId);
         return importRequest;
+    }
+
+    boolean hasAnyActiveProcessingImport() throws AtlasBaseException {
+        for (String importId : fetchInProgressImportIds()) {
+            AtlasAsyncImportRequest processingImport = loadFresh(importId);
+
+            if (processingImport == null || !ImportStatus.PROCESSING.equals(processingImport.getStatus())) {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    boolean isStaleProcessingImport(AtlasAsyncImportRequest importRequest, long now) {
+        long processingStartTime = importRequest.getProcessingStartTime();
+
+        if (processingStartTime <= 0L) {
+            return true;
+        }
+
+        return now - processingStartTime >= processingStaleThresholdMs;
+    }
+
+    private void reclaimStaleProcessingImport(AtlasAsyncImportRequest importRequest) throws AtlasBaseException {
+        String importId = importRequest.getImportId();
+
+        LOG.warn("claimNextWaitingImport(): recovering stale PROCESSING import {} back to WAITING", importId);
+
+        importRequest.setStatus(ImportStatus.WAITING);
+        importRequest.setProcessingStartTime(0L);
+        saveImportRequest(importRequest);
     }
 
     /**

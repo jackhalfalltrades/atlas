@@ -251,8 +251,9 @@ public class ImportTaskListenerImpl implements Service, ActiveStateChangeHandler
      * Attempts to claim and start the next available import on this node.
      *
      * <p>Uses the per-node {@link #asyncImportSemaphore} as a first gate (avoids hitting
-     * JanusGraph when this node already has an import running), then delegates the global
-     * exclusive claim via {@link AsyncImportService#tryClaim()} — the
+     * JanusGraph when this node already has an import running), then delegates stale-claim
+     * recovery + global exclusive claim via {@link AsyncImportService#recoverStaleClaims()}
+     * and {@link AsyncImportService#tryClaim()} — the
      * {@link org.apache.atlas.tasks.GraphClaimable} contract that atomically transitions
      * the next WAITING import to PROCESSING inside a single {@code @GraphTransaction}.
      */
@@ -271,6 +272,7 @@ public class ImportTaskListenerImpl implements Service, ActiveStateChangeHandler
 
         AtlasAsyncImportRequest claimed = null;
         try {
+            asyncImportService.recoverStaleClaims();
             claimed = asyncImportService.tryClaim();
         } catch (IllegalStateException e) {
             // Graph is closed — this happens during JVM shutdown (INITIALIZER mode exits

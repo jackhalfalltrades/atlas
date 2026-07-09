@@ -150,4 +150,114 @@ public class TaskRegistryTest {
         registry.deleteByGuid(task.getGuid());
         graph.commit();
     }
+
+    @Test
+    public void tryClaimTask_returnsFalse_whenAnotherTaskIsInProgress() throws AtlasBaseException {
+        clearAllTasks();
+
+        AtlasTask task1 = new AtlasTask("t1", "test", java.util.Collections.emptyMap());
+        AtlasTask task2 = new AtlasTask("t2", "test", java.util.Collections.emptyMap());
+
+        registry.save(task1);
+        registry.save(task2);
+        graph.commit();
+
+        List<AtlasTask> pending = registry.getPendingTasks();
+        assertEquals(pending.size(), 2);
+
+        String oldestPendingGuid = pending.get(0).getGuid();
+        String otherGuid = pending.get(1).getGuid();
+
+        boolean first = registry.tryClaimTask(oldestPendingGuid);
+        assertTrue(first, "Oldest task claim must succeed");
+
+        boolean second = registry.tryClaimTask(otherGuid);
+        assertFalse(second, "Second task claim must fail while another task is IN_PROGRESS");
+
+        registry.deleteByGuid(task1.getGuid());
+        registry.deleteByGuid(task2.getGuid());
+        graph.commit();
+    }
+
+    @Test
+    public void tryClaimTask_returnsFalse_forOutOfOrderPendingTask() throws AtlasBaseException, InterruptedException {
+        clearAllTasks();
+
+        AtlasTask older = new AtlasTask("older", "test", java.util.Collections.emptyMap());
+        Thread.sleep(5);
+        AtlasTask newer = new AtlasTask("newer", "test", java.util.Collections.emptyMap());
+
+        registry.save(older);
+        registry.save(newer);
+        graph.commit();
+
+        boolean newerFirst = registry.tryClaimTask(newer.getGuid());
+        assertFalse(newerFirst, "Newer task must not be claimable before oldest PENDING task");
+
+        boolean olderThen = registry.tryClaimTask(older.getGuid());
+        assertTrue(olderThen, "Oldest PENDING task must be claimable");
+
+        registry.deleteByGuid(older.getGuid());
+        registry.deleteByGuid(newer.getGuid());
+        graph.commit();
+    }
+
+    @Test
+    public void tryClaimTask_recoversStaleInProgressTask() throws AtlasBaseException {
+        clearAllTasks();
+
+        AtlasTask task = new AtlasTask("stale", "test", java.util.Collections.emptyMap());
+        registry.save(task);
+        graph.commit();
+
+        assertTrue(registry.tryClaimTask(task.getGuid()), "first claim should move task to IN_PROGRESS");
+        graph.commit();
+
+        TaskRegistry zeroThresholdRegistry = new TaskRegistry(graph, 0L);
+        zeroThresholdRegistry.recoverStaleInProgressTasks();
+        boolean reclaimedClaim = zeroThresholdRegistry.tryClaimTask(task.getGuid());
+
+        assertTrue(reclaimedClaim, "stale IN_PROGRESS task should be reclaimed and claimed again");
+
+        AtlasTask updated = registry.getById(task.getGuid());
+        assertEquals(updated.getStatus(), AtlasTask.Status.IN_PROGRESS);
+
+        registry.deleteByGuid(task.getGuid());
+        graph.commit();
+    }
+
+    @Test
+    public void tryClaimTask_recoveryPreservesFifoAfterReclaim() throws AtlasBaseException, InterruptedException {
+        clearAllTasks();
+
+        AtlasTask older = new AtlasTask("older-recover", "test", java.util.Collections.emptyMap());
+        Thread.sleep(5);
+        AtlasTask newer = new AtlasTask("newer-recover", "test", java.util.Collections.emptyMap());
+
+        registry.save(older);
+        registry.save(newer);
+        graph.commit();
+
+        assertTrue(registry.tryClaimTask(older.getGuid()), "oldest task should be claimed first");
+        graph.commit();
+
+        TaskRegistry zeroThresholdRegistry = new TaskRegistry(graph, 0L);
+        zeroThresholdRegistry.recoverStaleInProgressTasks();
+        boolean      newerClaim            = zeroThresholdRegistry.tryClaimTask(newer.getGuid());
+        assertFalse(newerClaim, "reclaimed oldest task must still be claimed before newer task");
+
+        boolean olderReclaimed = zeroThresholdRegistry.tryClaimTask(older.getGuid());
+        assertTrue(olderReclaimed, "oldest reclaimed task must remain FIFO-claimable");
+
+        registry.deleteByGuid(older.getGuid());
+        registry.deleteByGuid(newer.getGuid());
+        graph.commit();
+    }
+
+    private void clearAllTasks() throws AtlasBaseException {
+        for (AtlasTask task : registry.getAll()) {
+            registry.deleteByGuid(task.getGuid());
+        }
+        graph.commit();
+    }
 }

@@ -79,4 +79,15 @@ public interface GraphClaimable<T> {
      *         the claim attempt
      */
     T tryClaim() throws AtlasBaseException;
+
+    /**
+     * Performs implementation-specific stale-claim recovery before a claim
+     * attempt. Implementations that don't need recovery can keep the default
+     * no-op behavior.
+     *
+     * @throws AtlasBaseException if an unrecoverable error occurs during
+     *         recovery
+     */
+    default void recoverStaleClaims() throws AtlasBaseException {
+    }
 }

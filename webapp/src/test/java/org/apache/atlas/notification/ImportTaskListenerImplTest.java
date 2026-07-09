@@ -88,7 +88,8 @@ public class ImportTaskListenerImplTest {
 
         verify(importRequest, times(1)).setStatus(ImportStatus.WAITING);
         verify(asyncImportService, times(1)).updateImportRequest(importRequest);
-        // async claim attempt fires — tryClaim() called at least once (GraphClaimable contract)
+        // async claim attempt fires — recovery + claim called at least once (GraphClaimable contract)
+        verify(asyncImportService, atLeastOnce()).recoverStaleClaims();
         verify(asyncImportService, atLeastOnce()).tryClaim();
     }
 
@@ -125,6 +126,7 @@ public class ImportTaskListenerImplTest {
         importTaskListener.onCompleteImportRequest(IMPORT_ID);
         Thread.sleep(300);
 
+        verify(asyncImportService, atLeastOnce()).recoverStaleClaims();
         verify(asyncImportService, atLeastOnce()).tryClaim();
     }
 
@@ -138,6 +140,7 @@ public class ImportTaskListenerImplTest {
 
         importTaskListener.tryClaimAndStartImport();
 
+        verify(asyncImportService, never()).recoverStaleClaims();
         verify(asyncImportService, never()).tryClaim();
         assertEquals(getSemaphore().availablePermits(), 0, "Semaphore must stay acquired");
     }
@@ -148,6 +151,7 @@ public class ImportTaskListenerImplTest {
 
         importTaskListener.tryClaimAndStartImport();
 
+        verify(asyncImportService, times(1)).recoverStaleClaims();
         verify(asyncImportService, times(1)).tryClaim();
         assertEquals(getSemaphore().availablePermits(), 1, "Semaphore must be released when nothing to claim");
     }
@@ -165,6 +169,7 @@ public class ImportTaskListenerImplTest {
 
         importTaskListener.tryClaimAndStartImport();
 
+        verify(asyncImportService, times(1)).recoverStaleClaims();
         verify(asyncImportService, times(1)).tryClaim();
         verify(mockExecutor, times(1)).submit(any(Runnable.class));
         assertEquals(getSemaphore().availablePermits(), 0, "Semaphore must be held while import runs");

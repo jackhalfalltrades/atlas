@@ -55,6 +55,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
@@ -351,6 +352,47 @@ public class AsyncImportServiceTest {
         org.testng.Assert.assertEquals(result.getStatus(), PROCESSING,
                 "Status endpoint must return live JanusGraph value, not stale cached value");
         Mockito.verify(dataAccess, Mockito.times(1)).load(any(AtlasAsyncImportRequest.class));
+    }
+
+    @Test
+    public void testHasAnyActiveProcessingImport_reclaimsStaleProcessingImport() throws AtlasBaseException {
+        AsyncImportService service = spy(new AsyncImportService(dataAccess, 1000L));
+        String staleImportId = "stale-processing";
+
+        AtlasAsyncImportRequest stale = new AtlasAsyncImportRequest();
+        stale.setImportId(staleImportId);
+        stale.setStatus(PROCESSING);
+        stale.setProcessingStartTime(System.currentTimeMillis() - 5000L);
+
+        doReturn(Collections.singletonList(staleImportId)).when(service).fetchInProgressImportIds();
+        doReturn(stale).when(service).loadFresh(staleImportId);
+
+        service.recoverStaleClaims();
+        boolean hasActiveProcessing = service.hasAnyActiveProcessingImport();
+
+        assertFalse(hasActiveProcessing, "stale PROCESSING import should be reclaimed and not block claims");
+        assertEquals(stale.getStatus(), WAITING, "stale import should be moved back to WAITING");
+        assertEquals(stale.getProcessingStartTime(), 0L, "reclaimed import should reset processing start time");
+        verify(service, times(1)).saveImportRequest(stale);
+    }
+
+    @Test
+    public void testHasAnyActiveProcessingImport_keepsFreshProcessingImportActive() throws AtlasBaseException {
+        AsyncImportService service = spy(new AsyncImportService(dataAccess, 60000L));
+        String activeImportId = "active-processing";
+
+        AtlasAsyncImportRequest active = new AtlasAsyncImportRequest();
+        active.setImportId(activeImportId);
+        active.setStatus(PROCESSING);
+        active.setProcessingStartTime(System.currentTimeMillis());
+
+        doReturn(Collections.singletonList(activeImportId)).when(service).fetchInProgressImportIds();
+        doReturn(active).when(service).loadFresh(activeImportId);
+
+        boolean hasActiveProcessing = service.hasAnyActiveProcessingImport();
+
+        assertTrue(hasActiveProcessing, "fresh PROCESSING import should continue to block new claims");
+        verify(service, times(0)).saveImportRequest(any(AtlasAsyncImportRequest.class));
     }
 
     @AfterMethod

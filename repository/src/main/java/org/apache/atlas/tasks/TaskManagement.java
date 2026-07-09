@@ -125,11 +125,22 @@ public class TaskManagement implements Service, ActiveStateChangeHandler {
 
     /**
      * Returns a {@link GraphClaimable} scoped to the given task GUID.
-     * Callers (e.g. {@link TaskExecutor.TaskConsumer}) can use this to claim
-     * a specific task without knowing about {@link TaskRegistry} directly.
+     * Callers (e.g. {@link TaskExecutor.TaskConsumer}) can use this to recover
+     * stale claims and claim a specific task without knowing about
+     * {@link TaskRegistry} directly.
      */
     public GraphClaimable<Boolean> claimableFor(String taskGuid) {
-        return () -> registry.tryClaimTask(taskGuid);
+        return new GraphClaimable<Boolean>() {
+            @Override
+            public Boolean tryClaim() {
+                return registry.tryClaimTask(taskGuid);
+            }
+
+            @Override
+            public void recoverStaleClaims() {
+                registry.recoverStaleInProgressTasks();
+            }
+        };
     }
 
     @Override
