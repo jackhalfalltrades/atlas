@@ -20,6 +20,7 @@ package org.apache.atlas.repository.patches;
 
 import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.RequestContext;
+import org.apache.atlas.exception.AtlasBaseException;
 import org.apache.atlas.model.patches.AtlasPatch.AtlasPatches;
 import org.apache.atlas.model.patches.AtlasPatch.PatchStatus;
 import org.apache.atlas.repository.graph.GraphBackedSearchIndexer;
@@ -113,7 +114,7 @@ public class AtlasPatchManager {
     }
 
     private void applyHandler(AtlasPatchHandler handler, PatchStatus patchStatus, AtlasPatchRegistry registry,
-            String nodeId, long processStartMs, boolean includeNotApplied) {
+            String nodeId, long processStartMs, boolean includeNotApplied) throws AtlasBaseException {
         if (patchStatus == APPLIED || patchStatus == SKIPPED) {
             LOG.info("Ignoring java handler: {}; status: {}", handler.getPatchId(), patchStatus);
             return;

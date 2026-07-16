@@ -59,7 +59,7 @@ public class TypeDefChangeNotifierTest {
         when(configuration.getString(TypeDefSyncConsumer.TOPIC_CONFIG, TypeDefSyncConsumer.DEFAULT_TOPIC))
                 .thenReturn("ATLAS_TYPEDEF_TEST_TOPIC");
         when(configuration.getStringArray(HAConfiguration.ATLAS_SERVER_IDS))
-                .thenReturn(new String[]{"server1"});
+                .thenReturn(new String[] {"server1"});
         when(configuration.getString(HAConfiguration.ATLAS_SERVER_ADDRESS_PREFIX + "server1"))
                 .thenReturn("127.0.0.1:21000");
     }

@@ -24,9 +24,9 @@ import org.apache.atlas.repository.Constants;
 import org.apache.commons.configuration2.MapConfiguration;
 import org.testng.annotations.Test;
 
-import java.util.HashMap;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -63,7 +63,7 @@ public class AbstractStorageBasedAuditRepositoryTest {
     public void getAuditExcludeAttributes_readsAndCachesConfiguredAttributes() {
         TestRepository repository = new TestRepository();
         Map<String, Object> entries = new HashMap<>();
-        entries.put("atlas.audit.hbase.entity.hive_table.attributes.exclude", new String[]{"owner", "location"});
+        entries.put("atlas.audit.hbase.entity.hive_table.attributes.exclude", new String[] {"owner", "location"});
         MapConfiguration config = new MapConfiguration(entries);
 
         repository.setApplicationProperties(config);
@@ -72,7 +72,7 @@ public class AbstractStorageBasedAuditRepositoryTest {
         assertEquals(excludes, Arrays.asList("owner", "location"));
 
         // cache should preserve the original value
-        config.setProperty("atlas.audit.hbase.entity.hive_table.attributes.exclude", new String[]{"changed"});
+        config.setProperty("atlas.audit.hbase.entity.hive_table.attributes.exclude", new String[] {"changed"});
         assertEquals(repository.getAuditExcludeAttributes("hive_table"), Arrays.asList("owner", "location"));
     }
 
