@@ -55,12 +55,12 @@ public class AtlasPatchService implements Service, ActiveStateChangeHandler {
     public void instanceIsActive() {
         LOG.info("==> AtlasPatchService.instanceIsActive()");
 
-        // Patches run only on MONOLITHIC and INITIALIZER nodes.
-        // METADATA_SERVER and NOTIFICATION_PROCESSOR assume patches were already applied
-        // by an INITIALIZER or MONOLITHIC node and must not re-apply them.
+        // MONOLITHIC/INITIALIZER apply full patch set.
+        // Other RUN_MODEs execute only failed/stale recovery via shared CAS.
         if (!AtlasRunMode.current().runsInitialization()) {
-            LOG.info("AtlasPatchService.instanceIsActive(): RUN_MODE={} — skipping patch application",
+            LOG.info("AtlasPatchService.instanceIsActive(): RUN_MODE={} — running patch recovery-only pass",
                     AtlasRunMode.current());
+            startRecoveryOnly();
             return;
         }
 
@@ -81,6 +81,15 @@ public class AtlasPatchService implements Service, ActiveStateChangeHandler {
             patchManager.applyAll();
         } catch (Exception ex) {
             LOG.error("AtlasPatchService: failed in applying patches", ex);
+        }
+    }
+
+    void startRecoveryOnly() {
+        try {
+            LOG.info("AtlasPatchService: running patch recovery-only pass...");
+            patchManager.recoverFailedOrInProgress();
+        } catch (Exception ex) {
+            LOG.error("AtlasPatchService: recovery-only pass failed", ex);
         }
     }
 }

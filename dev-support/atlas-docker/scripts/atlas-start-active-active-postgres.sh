@@ -15,16 +15,22 @@ cd "${ROOT_DIR}"
 
 COMPOSE_FILE="docker-compose.atlas-active-active.yml"
 COMPOSE_FILE_POSTGRES="docker-compose.atlas-active-active-postgres.yml"
+COMPOSE_FILE_MONOLITHIC="docker-compose.atlas-monolithic.yml"
+COMPOSE_FILE_MONOLITHIC_POSTGRES="docker-compose.atlas-monolithic-postgres.yml"
 ENV_BASE=".env"
 ENV_AA=".env.active-active"
+RUN_MODE="${RUN_MODE:-MODULAR}"
+METADATA_REPLICAS="${METADATA_REPLICAS:-2}"
+NOTIFICATION_REPLICAS="${NOTIFICATION_REPLICAS:-2}"
+REPLICAS="${REPLICAS:-2}"
 
 if [[ ! -f "${ENV_BASE}" || ! -f "${ENV_AA}" ]]; then
   echo "[ERROR] Missing ${ENV_BASE} or ${ENV_AA} in ${ROOT_DIR}" >&2
   exit 1
 fi
 
-if [[ ! -f "${COMPOSE_FILE_POSTGRES}" ]]; then
-  echo "[ERROR] Missing ${COMPOSE_FILE_POSTGRES} in ${ROOT_DIR}" >&2
+if [[ ! -f "${COMPOSE_FILE_POSTGRES}" || ! -f "${COMPOSE_FILE_MONOLITHIC}" || ! -f "${COMPOSE_FILE_MONOLITHIC_POSTGRES}" ]]; then
+  echo "[ERROR] Missing compose files in ${ROOT_DIR}" >&2
   exit 1
 fi
 
@@ -43,30 +49,59 @@ else
 fi
 
 echo "[2/8] Starting infrastructure..."
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d \
-  atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE_MONOLITHIC}" -f "${COMPOSE_FILE_MONOLITHIC_POSTGRES}" up -d \
+    atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
+else
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d \
+    atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
+fi
 
 echo "[3/8] Initializing Postgres users/databases/schema..."
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d atlas-db-init
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE_MONOLITHIC}" -f "${COMPOSE_FILE_MONOLITHIC_POSTGRES}" up -d atlas-db-init
+else
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d atlas-db-init
+fi
 
-echo "[4/8] Running initializer..."
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d --force-recreate atlas-initializer
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  echo "[4/8] Starting MONOLITHIC Atlas services..."
+  RUN_MODE=MONOLITHIC docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE_MONOLITHIC}" -f "${COMPOSE_FILE_MONOLITHIC_POSTGRES}" up -d --force-recreate \
+    --no-deps \
+    --scale atlas-monolithic-server="${REPLICAS}" \
+    atlas-monolithic-server atlas-lb
+else
+  echo "[4/8] Running initializer..."
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d --force-recreate atlas-initializer
 
-echo "[5/8] Starting active-active Atlas services..."
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d --force-recreate \
-  --scale atlas-metadata-server=2 --scale atlas-notification-proc=2 \
-  atlas-metadata-server atlas-notification-proc atlas-lb
+  echo "[5/8] Starting modular RUN_MODE services..."
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" up -d --force-recreate \
+    --scale atlas-metadata-server="${METADATA_REPLICAS}" --scale atlas-notification-proc="${NOTIFICATION_REPLICAS}" \
+    atlas-metadata-server atlas-notification-proc atlas-lb
+fi
 
 echo "[6/8] Service status:"
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" ps
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE_MONOLITHIC}" -f "${COMPOSE_FILE_MONOLITHIC_POSTGRES}" ps
+else
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" -f "${COMPOSE_FILE_POSTGRES}" ps
+fi
 
 echo "[7/8] Atlas admin status via LB:"
 wget -q -S -O- http://localhost:21000/api/atlas/admin/status 2>&1 | tail -20 || true
 
 echo
-echo "[DONE] Active-active Atlas started in Postgres mode."
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  echo "[DONE] MONOLITHIC Atlas started in Postgres mode."
+else
+  echo "[DONE] Modular RUN_MODE Atlas started in Postgres mode."
+fi

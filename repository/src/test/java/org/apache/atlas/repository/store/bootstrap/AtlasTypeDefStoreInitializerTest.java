@@ -169,24 +169,35 @@ public class AtlasTypeDefStoreInitializerTest {
     }
 
     @Test
-    public void testInitWhenHADisabled() throws Exception {
+    public void testInitWhenHADisabled_isNoOp() throws Exception {
         haConfigMock.when(() -> HAConfiguration.isHAEnabled(conf)).thenReturn(false);
         initializer.init();
-        verify(typeDefStore, times(1)).init();
-        verify(typeDefStore, times(1)).notifyLoadCompletion();
+        verify(typeDefStore, never()).init();
+        verify(typeDefStore, never()).notifyLoadCompletion();
     }
 
     @Test
-    public void testInitWhenHAEnabled() throws Exception {
+    public void testInitWhenHAEnabled_isNoOp() throws Exception {
         haConfigMock.when(() -> HAConfiguration.isHAEnabled(conf)).thenReturn(true);
         initializer.init();
         verify(typeDefStore, never()).init();
+        verify(typeDefStore, never()).notifyLoadCompletion();
     }
 
     @Test
     public void testInstanceIsActive() throws Exception {
         initializer.instanceIsActive();
         verify(typeDefStore, times(1)).init();
+    }
+
+    @Test
+    public void testLoadTypesOnlyInitializesOnce() throws Exception {
+        Method loadTypesOnlyMethod = AtlasTypeDefStoreInitializer.class.getDeclaredMethod("loadTypesOnly");
+        loadTypesOnlyMethod.setAccessible(true);
+        loadTypesOnlyMethod.invoke(initializer);
+
+        verify(typeDefStore, times(1)).init();
+        verify(typeDefStore, times(1)).notifyLoadCompletion();
     }
 
     @Test

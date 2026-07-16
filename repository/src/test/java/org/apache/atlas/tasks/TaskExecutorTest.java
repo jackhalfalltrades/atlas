@@ -27,11 +27,8 @@ import org.testng.annotations.Test;
 
 import javax.inject.Inject;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -92,15 +89,17 @@ public class TaskExecutorTest extends BaseTaskFixture {
         AtlasTask errorThrowingTask = taskManagement.createTask("errorThrowingTask", "test", Collections.emptyMap());
 
         TaskManagement.Statistics statistics = new TaskManagement.Statistics();
-        List<AtlasTask>           tasks      = new ArrayList<>(Arrays.asList(addTask, errorThrowingTask));
 
         graph.commit();
 
-        TaskExecutor taskExecutor = new TaskExecutor(taskRegistry, taskFactoryMap, statistics);
+        GraphClaimable<Boolean> forceClaim = () -> true;
+        TaskExecutor.TaskConsumer addConsumer = new TaskExecutor.TaskConsumer(
+                addTask, forceClaim, taskRegistry, taskFactoryMap, statistics);
+        TaskExecutor.TaskConsumer errorConsumer = new TaskExecutor.TaskConsumer(
+                errorThrowingTask, forceClaim, taskRegistry, taskFactoryMap, statistics);
 
-        taskExecutor.addAll(tasks);
-
-        taskExecutor.waitUntilDone();
+        addConsumer.run();
+        errorConsumer.run();
 
         assertEquals(statistics.getTotal(), 2);
         assertEquals(statistics.getTotalSuccess(), 1);
@@ -112,7 +111,7 @@ public class TaskExecutorTest extends BaseTaskFixture {
         assertTrue(spyingFactory.getAddTask().taskPerformed());
         assertTrue(spyingFactory.getErrorTask().taskPerformed());
 
-        assertTaskUntilFail(errorThrowingTask, taskExecutor);
+        assertTaskUntilFail(errorThrowingTask, taskFactoryMap, statistics);
     }
 
     @Test
@@ -185,7 +184,8 @@ public class TaskExecutorTest extends BaseTaskFixture {
                 "Task must execute and succeed when claim returns true");
     }
 
-    private void assertTaskUntilFail(AtlasTask errorThrowingTask, TaskExecutor taskExecutor) throws AtlasBaseException, InterruptedException {
+    private void assertTaskUntilFail(AtlasTask errorThrowingTask, Map<String, TaskFactory> taskFactoryMap, TaskManagement.Statistics statistics)
+            throws AtlasBaseException {
         AtlasTask errorTaskFromDB = taskManagement.getByGuid(errorThrowingTask.getGuid());
 
         assertNotNull(errorTaskFromDB);
@@ -193,11 +193,13 @@ public class TaskExecutorTest extends BaseTaskFixture {
         assertEquals(errorTaskFromDB.getAttemptCount(), 1);
         assertEquals(errorTaskFromDB.getStatus(), AtlasTask.Status.PENDING);
 
-        for (int i = errorTaskFromDB.getAttemptCount(); i <= AtlasTask.MAX_ATTEMPT_COUNT; i++) {
-            taskExecutor.addAll(Collections.singletonList(errorThrowingTask));
-        }
+        GraphClaimable<Boolean> forceClaim = () -> true;
 
-        taskExecutor.waitUntilDone();
+        for (int i = errorTaskFromDB.getAttemptCount(); i <= AtlasTask.MAX_ATTEMPT_COUNT; i++) {
+            TaskExecutor.TaskConsumer retryConsumer = new TaskExecutor.TaskConsumer(
+                    errorThrowingTask, forceClaim, taskRegistry, taskFactoryMap, statistics);
+            retryConsumer.run();
+        }
         graph.commit();
         assertEquals(errorThrowingTask.getStatus(), AtlasTask.Status.FAILED);
     }

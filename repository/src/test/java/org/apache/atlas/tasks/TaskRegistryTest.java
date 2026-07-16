@@ -23,6 +23,8 @@ import org.apache.atlas.exception.AtlasBaseException;
 import org.apache.atlas.model.tasks.AtlasTask;
 import org.apache.atlas.repository.graphdb.AtlasGraph;
 import org.apache.atlas.repository.graphdb.AtlasVertex;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Guice;
 import org.testng.annotations.Test;
 
@@ -44,6 +46,17 @@ public class TaskRegistryTest {
 
     @Inject
     TaskRegistry registry;
+
+    @BeforeMethod(alwaysRun = true)
+    public void clearTasksBeforeEach() throws AtlasBaseException {
+        BaseTaskFixture.TASK_TEST_LOCK.lock();
+        clearAllTasks();
+    }
+
+    @AfterMethod(alwaysRun = true)
+    public void unlockTaskTestExecution() {
+        BaseTaskFixture.TASK_TEST_LOCK.unlock();
+    }
 
     @Test
     public void basic() throws AtlasException, AtlasBaseException {
@@ -215,7 +228,8 @@ public class TaskRegistryTest {
 
         TaskRegistry zeroThresholdRegistry = new TaskRegistry(graph, 0L);
         zeroThresholdRegistry.recoverStaleInProgressTasks();
-        boolean reclaimedClaim = zeroThresholdRegistry.tryClaimTask(task.getGuid());
+        graph.commit();
+        boolean reclaimedClaim = registry.tryClaimTask(task.getGuid());
 
         assertTrue(reclaimedClaim, "stale IN_PROGRESS task should be reclaimed and claimed again");
 
@@ -243,10 +257,11 @@ public class TaskRegistryTest {
 
         TaskRegistry zeroThresholdRegistry = new TaskRegistry(graph, 0L);
         zeroThresholdRegistry.recoverStaleInProgressTasks();
-        boolean      newerClaim            = zeroThresholdRegistry.tryClaimTask(newer.getGuid());
+        graph.commit();
+        boolean      newerClaim            = registry.tryClaimTask(newer.getGuid());
         assertFalse(newerClaim, "reclaimed oldest task must still be claimed before newer task");
 
-        boolean olderReclaimed = zeroThresholdRegistry.tryClaimTask(older.getGuid());
+        boolean olderReclaimed = registry.tryClaimTask(older.getGuid());
         assertTrue(olderReclaimed, "oldest reclaimed task must remain FIFO-claimable");
 
         registry.deleteByGuid(older.getGuid());

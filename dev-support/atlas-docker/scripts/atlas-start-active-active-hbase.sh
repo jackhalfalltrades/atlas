@@ -14,8 +14,13 @@ fi
 cd "${ROOT_DIR}"
 
 COMPOSE_FILE="docker-compose.atlas-active-active.yml"
+COMPOSE_FILE_MONOLITHIC="docker-compose.atlas-monolithic.yml"
 ENV_BASE=".env"
 ENV_AA=".env.active-active"
+RUN_MODE="${RUN_MODE:-MODULAR}"
+METADATA_REPLICAS="${METADATA_REPLICAS:-2}"
+NOTIFICATION_REPLICAS="${NOTIFICATION_REPLICAS:-2}"
+REPLICAS="${REPLICAS:-2}"
 
 if [[ ! -f "${ENV_BASE}" || ! -f "${ENV_AA}" ]]; then
   echo "[ERROR] Missing ${ENV_BASE} or ${ENV_AA} in ${ROOT_DIR}" >&2
@@ -37,25 +42,48 @@ else
 fi
 
 echo "[2/7] Starting infrastructure..."
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" up -d \
-  atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE_MONOLITHIC}" up -d \
+    atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
+else
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" up -d \
+    atlas-hadoop atlas-zk atlas-kafka atlas-solr atlas-backend atlas-db
+fi
 
-echo "[3/7] Running initializer..."
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" up -d --force-recreate atlas-initializer
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  echo "[3/7] Starting MONOLITHIC Atlas services..."
+  RUN_MODE=MONOLITHIC docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE_MONOLITHIC}" up -d --force-recreate \
+    --no-deps \
+    --scale atlas-monolithic-server="${REPLICAS}" \
+    atlas-monolithic-server atlas-lb
+else
+  echo "[3/7] Running initializer..."
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" up -d --force-recreate atlas-initializer
 
-echo "[4/7] Starting active-active Atlas services..."
-docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
-  -f "${COMPOSE_FILE}" up -d --force-recreate \
-  --scale atlas-metadata-server=2 --scale atlas-notification-proc=2 \
-  atlas-metadata-server atlas-notification-proc atlas-lb
+  echo "[4/7] Starting modular RUN_MODE services..."
+  docker compose --env-file "${ENV_BASE}" --env-file "${ENV_AA}" \
+    -f "${COMPOSE_FILE}" up -d --force-recreate \
+    --scale atlas-metadata-server="${METADATA_REPLICAS}" --scale atlas-notification-proc="${NOTIFICATION_REPLICAS}" \
+    atlas-metadata-server atlas-notification-proc atlas-lb
+fi
 
 echo "[5/7] Service status:"
-docker compose -f "${COMPOSE_FILE}" ps
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  docker compose -f "${COMPOSE_FILE_MONOLITHIC}" ps
+else
+  docker compose -f "${COMPOSE_FILE}" ps
+fi
 
 echo "[6/7] Atlas admin status via LB:"
 wget -q -S -O- http://localhost:21000/api/atlas/admin/status 2>&1 | tail -20 || true
 
 echo
-echo "[DONE] Active-active Atlas started in HBase mode."
+if [[ "${RUN_MODE}" == "MONOLITHIC" ]]; then
+  echo "[DONE] MONOLITHIC Atlas started in HBase mode."
+else
+  echo "[DONE] Modular RUN_MODE Atlas started in HBase mode."
+fi

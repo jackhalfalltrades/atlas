@@ -47,6 +47,7 @@ import org.apache.atlas.repository.graphdb.AtlasGraphManagement;
 import org.apache.atlas.repository.graphdb.AtlasPropertyKey;
 import org.apache.atlas.repository.graphdb.AtlasUniqueKeyHandler;
 import org.apache.atlas.repository.store.graph.v2.AtlasGraphUtilsV2;
+import org.apache.atlas.tasks.GraphClaimable;
 import org.apache.atlas.type.AtlasArrayType;
 import org.apache.atlas.type.AtlasBusinessMetadataType;
 import org.apache.atlas.type.AtlasClassificationType;
@@ -69,6 +70,7 @@ import org.springframework.stereotype.Component;
 
 import javax.inject.Inject;
 
+import java.lang.management.ManagementFactory;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -172,6 +174,7 @@ public class GraphBackedSearchIndexer implements SearchIndexer, ActiveStateChang
 
     private static final String         VERTEX_ID_IN_IMPORT_KEY  = "__vIdInImport";
     private static final String         EDGE_ID_IN_IMPORT_KEY    = "__eIdInImport";
+    private static final long           INDEX_INIT_LEASE_MS      = 300000L;
     private static final List<Class<?>> INDEX_EXCLUSION_CLASSES  = new ArrayList<>(Arrays.asList(Boolean.class, BigDecimal.class, BigInteger.class));
     private static final Set<String>    GLOBAL_UNIQUE_INDEX_KEYS = new HashSet<>();
     private static final Set<String>    TYPE_UNIQUE_INDEX_KEYS   = new HashSet<>();
@@ -256,13 +259,51 @@ public class GraphBackedSearchIndexer implements SearchIndexer, ActiveStateChang
             return;
         }
 
-        LOG.info("Reacting to active: initializing index");
+        String ownerId = buildIndexInitOwnerId();
+        IndexRecoveryService.RecoveryInfoManagement claimManager = new IndexRecoveryService.RecoveryInfoManagement(provider.get());
+        GraphClaimable<Boolean> claimAction = new GraphClaimable<Boolean>() {
+            @Override
+            public Boolean tryClaim() {
+                return claimManager.tryClaimOwnership(ownerId, INDEX_INIT_LEASE_MS);
+            }
+
+            @Override
+            public void recoverStaleClaims() {
+                // lease-expiry based takeover is handled by tryClaimOwnership()
+            }
+        };
+
+        try {
+            claimAction.recoverStaleClaims();
+            if (!claimAction.tryClaim()) {
+                LOG.info("GraphBackedSearchIndexer.instanceIsActive(): index setup already claimed by another node; skipping");
+                return;
+            }
+        } catch (AtlasBaseException e) {
+            throw new AtlasException("Error claiming index initialization ownership", e);
+        }
+
+        LOG.info("Reacting to active: initializing index (owner={})", ownerId);
 
         try {
             initialize();
         } catch (RepositoryException | IndexException e) {
             throw new AtlasException("Error in reacting to active on initialization", e);
+        } finally {
+            claimManager.releaseOwnership(ownerId);
         }
+    }
+
+    private String buildIndexInitOwnerId() {
+        String runMode  = AtlasRunMode.current().name();
+        String hostName = System.getenv("HOSTNAME");
+        String jvmId    = ManagementFactory.getRuntimeMXBean().getName();
+
+        if (StringUtils.isBlank(hostName)) {
+            hostName = "unknown-host";
+        }
+
+        return runMode + "@" + hostName + "#" + jvmId;
     }
 
     @Override

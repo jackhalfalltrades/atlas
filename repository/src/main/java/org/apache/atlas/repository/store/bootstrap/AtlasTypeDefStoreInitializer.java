@@ -51,6 +51,7 @@ import org.apache.atlas.repository.patches.AtlasPatchManager;
 import org.apache.atlas.repository.patches.AtlasPatchRegistry;
 import org.apache.atlas.repository.patches.SuperTypesUpdatePatch;
 import org.apache.atlas.store.AtlasTypeDefStore;
+import org.apache.atlas.tasks.GraphClaimable;
 import org.apache.atlas.type.AtlasEntityType;
 import org.apache.atlas.type.AtlasStructType.AtlasAttribute;
 import org.apache.atlas.type.AtlasType;
@@ -74,6 +75,7 @@ import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlRootElement;
 
 import java.io.File;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -471,6 +473,8 @@ public class AtlasTypeDefStoreInitializer implements ActiveStateChangeHandler {
         String typePatchesDirName = typesDirName + File.separator + PATCHES_FOLDER_NAME;
         File   typePatchesDir     = new File(typePatchesDirName);
         File[] typePatchFiles     = typePatchesDir.exists() ? typePatchesDir.listFiles() : null;
+        String nodeId             = buildPatchNodeId();
+        long   processStartMs     = System.currentTimeMillis();
 
         if (typePatchFiles == null || typePatchFiles.length == 0) {
             LOG.info("Type patches directory {} does not exist or not readable or has no patches", typePatchesDirName);
@@ -519,6 +523,7 @@ public class AtlasTypeDefStoreInitializer implements ActiveStateChangeHandler {
 
                         int patchIndex = 0;
                         for (TypeDefPatch patch : patches.getPatches()) {
+                            int currentPatchIndex = patchIndex++;
                             PatchHandler patchHandler = patchHandlerRegistry.get(patch.getAction());
 
                             if (patchHandler == null) {
@@ -526,8 +531,30 @@ public class AtlasTypeDefStoreInitializer implements ActiveStateChangeHandler {
                                 continue;
                             }
 
-                            if (patchRegistry.isApplicable(patch.getId(), patchFile, patchIndex++)) {
+                            String patchId = patchRegistry.resolvePatchId(patch.getId(), patchFile, currentPatchIndex);
+                            if (patchRegistry.isApplicable(patch.getId(), patchFile, currentPatchIndex)) {
                                 PatchStatus status;
+                                if (patchRegistry.findByPatchId(patchId) == null) {
+                                    patchRegistry.register(patchId, patch.description, TYPEDEF_PATCH_TYPE, patch.action, UNKNOWN);
+                                }
+
+                                GraphClaimable<Boolean> claimAction = new GraphClaimable<Boolean>() {
+                                    @Override
+                                    public Boolean tryClaim() {
+                                        return patchRegistry.tryClaimPatchExecution(patchId, nodeId, processStartMs);
+                                    }
+
+                                    @Override
+                                    public void recoverStaleClaims() {
+                                        patchRegistry.recoverStaleInProgressClaims(nodeId, processStartMs);
+                                    }
+                                };
+
+                                claimAction.recoverStaleClaims();
+                                if (!claimAction.tryClaim()) {
+                                    LOG.info("{} in file: {} claim not acquired. Ignoring.", patchId, patchFile);
+                                    continue;
+                                }
 
                                 try {
                                     status = patchHandler.applyPatch(patch);
@@ -537,10 +564,12 @@ public class AtlasTypeDefStoreInitializer implements ActiveStateChangeHandler {
                                     LOG.error("Failed to apply {} (status: {}; action: {}) in file: {}. Ignored.", patch.getId(), status, patch.getAction(), patchFile);
                                 }
 
-                                patchRegistry.register(patch.id, patch.description, TYPEDEF_PATCH_TYPE, patch.action, status);
-                                LOG.info("{} (status: {}; action: {}) in file: {}", patch.getId(), status.toString(), patch.getAction(), patchFile);
+                                patchRegistry.updateStatus(patchId, status);
+                                LOG.info("{} (status: {}; action: {}) in file: {}", patchId, status.toString(), patch.getAction(), patchFile);
                             } else {
-                                LOG.info("{} in file: {} already {}. Ignoring.", patch.getId(), patchFile, patchRegistry.getStatus(patch.getId()).toString());
+                                PatchStatus existingStatus = patchRegistry.getStatus(patchId);
+                                LOG.info("{} in file: {} already {}. Ignoring.", patchId, patchFile,
+                                        existingStatus != null ? existingStatus : UNKNOWN);
                             }
                         }
                     } catch (Throwable t) {
@@ -549,6 +578,18 @@ public class AtlasTypeDefStoreInitializer implements ActiveStateChangeHandler {
                 }
             }
         }
+    }
+
+    private String buildPatchNodeId() {
+        String runMode  = AtlasRunMode.current().name();
+        String hostName = System.getenv("HOSTNAME");
+        String jvmId    = ManagementFactory.getRuntimeMXBean().getName();
+
+        if (StringUtils.isBlank(hostName)) {
+            hostName = "unknown-host";
+        }
+
+        return runMode + "@" + hostName + "#" + jvmId;
     }
 
     /**

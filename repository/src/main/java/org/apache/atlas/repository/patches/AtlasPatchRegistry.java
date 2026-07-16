@@ -43,7 +43,9 @@ import java.util.Map;
 
 import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.APPLIED;
 import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.FAILED;
+import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.IN_PROGRESS;
 import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.NOT_APPLIED;
+import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.SKIPPED;
 import static org.apache.atlas.model.patches.AtlasPatch.PatchStatus.UNKNOWN;
 import static org.apache.atlas.repository.Constants.CREATED_BY_KEY;
 import static org.apache.atlas.repository.Constants.MODIFICATION_TIMESTAMP_PROPERTY_KEY;
@@ -51,6 +53,8 @@ import static org.apache.atlas.repository.Constants.MODIFIED_BY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_ACTION_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_APPLIED_AT_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_APPLIED_BY_PROPERTY_KEY;
+import static org.apache.atlas.repository.Constants.PATCH_CLAIMED_BY_PROPERTY_KEY;
+import static org.apache.atlas.repository.Constants.PATCH_CLAIM_STARTED_AT_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_DESCRIPTION_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_ID_PROPERTY_KEY;
 import static org.apache.atlas.repository.Constants.PATCH_STATE_PROPERTY_KEY;
@@ -94,8 +98,18 @@ public class AtlasPatchRegistry {
         return status == FAILED || status == UNKNOWN || status == NOT_APPLIED;
     }
 
+    public boolean isRecoveryApplicable(String patchId) {
+        PatchStatus status = getStatus(patchId);
+
+        return status == FAILED || status == UNKNOWN || status == IN_PROGRESS;
+    }
+
     public PatchStatus getStatus(String id) {
         return patchNameStatusMap.get(id);
+    }
+
+    public String resolvePatchId(String incomingId, String patchFile, int index) {
+        return getId(incomingId, patchFile, index);
     }
 
     public void register(String patchId, String description, String patchType, String action, PatchStatus patchStatus) {
@@ -119,11 +133,94 @@ public class AtlasPatchRegistry {
                     setEncodedProperty(patchVertex, PATCH_APPLIED_BY_PROPERTY_KEY, currentUser);
                     setEncodedProperty(patchVertex, PATCH_APPLIED_AT_PROPERTY_KEY, requestTime);
                 }
+
+                if (patchStatus != IN_PROGRESS) {
+                    clearClaimProperties(patchVertex);
+                }
             }
         } finally {
             graph.commit();
 
             patchNameStatusMap.put(patchId, patchStatus);
+        }
+    }
+
+    public boolean tryClaimPatchExecution(String patchId, String nodeId, long reclaimInProgressBeforeMs) {
+        long now = System.currentTimeMillis();
+
+        try {
+            AtlasVertex patchVertex = findByPatchId(patchId);
+            if (patchVertex == null) {
+                patchVertex = graph.addVertex();
+                setEncodedProperty(patchVertex, PATCH_ID_PROPERTY_KEY, patchId);
+                setEncodedProperty(patchVertex, PATCH_TYPE_PROPERTY_KEY, JAVA_PATCH_TYPE);
+                setEncodedProperty(patchVertex, PATCH_ACTION_PROPERTY_KEY, "apply");
+                setEncodedProperty(patchVertex, PATCH_STATE_PROPERTY_KEY, UNKNOWN.toString());
+                setEncodedProperty(patchVertex, TIMESTAMP_PROPERTY_KEY, now);
+                setEncodedProperty(patchVertex, MODIFICATION_TIMESTAMP_PROPERTY_KEY, now);
+                setEncodedProperty(patchVertex, CREATED_BY_KEY, nodeId);
+                setEncodedProperty(patchVertex, MODIFIED_BY_KEY, nodeId);
+                clearClaimProperties(patchVertex);
+                patchNameStatusMap.put(patchId, UNKNOWN);
+            }
+
+            PatchStatus status = getPatchStatus(patchVertex);
+            if (status == APPLIED || status == SKIPPED) {
+                return false;
+            }
+
+            String claimedBy  = getEncodedProperty(patchVertex, PATCH_CLAIMED_BY_PROPERTY_KEY, String.class);
+            Long   claimedAt  = getEncodedProperty(patchVertex, PATCH_CLAIM_STARTED_AT_KEY, Long.class);
+            boolean recoverableInProgress = claimedAt == null || claimedAt <= reclaimInProgressBeforeMs;
+
+            boolean canClaim = status == FAILED || status == UNKNOWN || status == NOT_APPLIED
+                    || (status == IN_PROGRESS && (recoverableInProgress || StringUtils.equals(claimedBy, nodeId)));
+            if (!canClaim) {
+                return false;
+            }
+
+            setEncodedProperty(patchVertex, PATCH_STATE_PROPERTY_KEY, IN_PROGRESS.toString());
+            setEncodedProperty(patchVertex, PATCH_CLAIMED_BY_PROPERTY_KEY, nodeId);
+            setEncodedProperty(patchVertex, PATCH_CLAIM_STARTED_AT_KEY, now);
+            setEncodedProperty(patchVertex, MODIFICATION_TIMESTAMP_PROPERTY_KEY, now);
+            setEncodedProperty(patchVertex, MODIFIED_BY_KEY, nodeId);
+
+            patchNameStatusMap.put(patchId, IN_PROGRESS);
+            return true;
+        } finally {
+            graph.commit();
+        }
+    }
+
+    public void recoverStaleInProgressClaims(String nodeId, long reclaimInProgressBeforeMs) {
+        try {
+            AtlasGraphQuery query = graph.query()
+                    .has(Constants.PATCH_STATE_PROPERTY_KEY, IN_PROGRESS.toString());
+            Iterator<AtlasVertex> it = query.vertices().iterator();
+
+            while (it.hasNext()) {
+                AtlasVertex v = it.next();
+                String patchId   = getEncodedProperty(v, PATCH_ID_PROPERTY_KEY, String.class);
+                String claimedBy = getEncodedProperty(v, PATCH_CLAIMED_BY_PROPERTY_KEY, String.class);
+                Long   claimedAt = getEncodedProperty(v, PATCH_CLAIM_STARTED_AT_KEY, Long.class);
+
+                if (claimedAt != null && claimedAt > reclaimInProgressBeforeMs) {
+                    continue;
+                }
+
+                // Recover only work claimed by a different node.
+                if (StringUtils.isBlank(claimedBy) || StringUtils.equals(claimedBy, nodeId)) {
+                    continue;
+                }
+
+                LOG.warn("AtlasPatchRegistry.recoverStaleInProgressClaims(): recovering stale IN_PROGRESS patch {} from node {} to FAILED",
+                        patchId, claimedBy);
+                setEncodedProperty(v, PATCH_STATE_PROPERTY_KEY, FAILED.toString());
+                clearClaimProperties(v);
+                patchNameStatusMap.put(patchId, FAILED);
+            }
+        } finally {
+            graph.commit();
         }
     }
 
@@ -166,11 +263,18 @@ public class AtlasPatchRegistry {
             setEncodedProperty(patchVertex, MODIFICATION_TIMESTAMP_PROPERTY_KEY, RequestContext.get().getRequestTime());
             setEncodedProperty(patchVertex, CREATED_BY_KEY, AtlasTypeDefGraphStoreV2.getCurrentUser());
             setEncodedProperty(patchVertex, MODIFIED_BY_KEY, AtlasTypeDefGraphStoreV2.getCurrentUser());
+            setEncodedProperty(patchVertex, PATCH_CLAIMED_BY_PROPERTY_KEY, "");
+            setEncodedProperty(patchVertex, PATCH_CLAIM_STARTED_AT_KEY, 0L);
         } finally {
             graph.commit();
 
             patchNameStatusMap.put(patchId, patchStatus);
         }
+    }
+
+    private static void clearClaimProperties(AtlasVertex patchVertex) {
+        setEncodedProperty(patchVertex, PATCH_CLAIMED_BY_PROPERTY_KEY, "");
+        setEncodedProperty(patchVertex, PATCH_CLAIM_STARTED_AT_KEY, 0L);
     }
 
     private static Map<String, PatchStatus> getPatchNameStatusForAllRegistered(AtlasGraph graph) {

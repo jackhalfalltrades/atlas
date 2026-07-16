@@ -200,7 +200,7 @@ public class AtlasPatch implements Serializable {
                 '}';
     }
 
-    public enum PatchStatus { UNKNOWN, NOT_APPLIED, APPLIED, SKIPPED, FAILED }
+    public enum PatchStatus { UNKNOWN, NOT_APPLIED, IN_PROGRESS, APPLIED, SKIPPED, FAILED }
 
     @JsonAutoDetect(getterVisibility = PUBLIC_ONLY, setterVisibility = PUBLIC_ONLY, fieldVisibility = NONE)
     @JsonInclude(JsonInclude.Include.NON_NULL)
