@@ -428,11 +428,19 @@ public class IndexRecoveryService implements Service, ActiveStateChangeHandler, 
                         || leaseUntil == null || leaseUntil <= now;
 
                 if (!canClaim) {
+                    LOG.debug("IndexRecovery ownership claim denied ownerId={}, currentOwner={}, leaseUntil={}, now={}",
+                            ownerId, currentOwner, leaseUntil, now);
                     return false;
                 }
 
                 setEncodedProperty(vertex, INDEX_RECOVERY_OWNER_KEY, ownerId);
                 setEncodedProperty(vertex, INDEX_RECOVERY_LEASE_UNTIL_KEY, now + leaseMillis);
+                if (StringUtils.isNotBlank(currentOwner) && !ownerId.equals(currentOwner)) {
+                    LOG.warn("IndexRecovery ownership reclaimed ownerId={}, previousOwner={}, previousLeaseUntil={}",
+                            ownerId, currentOwner, leaseUntil);
+                } else {
+                    LOG.info("IndexRecovery ownership claimed/renewed ownerId={}, leaseUntil={}", ownerId, now + leaseMillis);
+                }
                 return true;
             } catch (Exception ex) {
                 LOG.error("Error while claiming index-recovery ownership for {}", ownerId, ex);
@@ -452,11 +460,13 @@ public class IndexRecoveryService implements Service, ActiveStateChangeHandler, 
 
                 String currentOwner = vertex.getProperty(INDEX_RECOVERY_OWNER_KEY, String.class);
                 if (!ownerId.equals(currentOwner)) {
+                    LOG.debug("IndexRecovery release skipped ownerId={}, currentOwner={}", ownerId, currentOwner);
                     return;
                 }
 
                 setEncodedProperty(vertex, INDEX_RECOVERY_OWNER_KEY, "");
                 setEncodedProperty(vertex, INDEX_RECOVERY_LEASE_UNTIL_KEY, 0L);
+                LOG.info("IndexRecovery ownership released ownerId={}", ownerId);
             } catch (Exception ex) {
                 LOG.error("Error while releasing index-recovery ownership for {}", ownerId, ex);
             } finally {

@@ -113,6 +113,15 @@ public final class Constants {
     public static final String PATCH_CLAIMED_BY_PROPERTY_KEY  = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "patch.claimedBy");
     public static final String PATCH_CLAIM_STARTED_AT_KEY     = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "patch.claimStartedAt");
     /**
+     * TypeDef bootstrap claim keys.
+     */
+    public static final String TYPEDEF_BOOTSTRAP_FILE_KEY         = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "typedef.bootstrap.file");
+    public static final String TYPEDEF_BOOTSTRAP_STATE_KEY        = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "typedef.bootstrap.state");
+    public static final String TYPEDEF_BOOTSTRAP_CLAIMED_BY_KEY   = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "typedef.bootstrap.claimedBy");
+    public static final String TYPEDEF_BOOTSTRAP_CLAIM_STARTED_AT = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "typedef.bootstrap.claimStartedAt");
+    public static final String TYPEDEF_BOOTSTRAP_APPLIED_BY_KEY   = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "typedef.bootstrap.appliedBy");
+    public static final String TYPEDEF_BOOTSTRAP_APPLIED_AT_KEY   = encodePropertyKey(INTERNAL_PROPERTY_KEY_PREFIX + "typedef.bootstrap.appliedAt");
+    /**
      * The homeId field is used when saving into Atlas a copy of an object that is being imported from another
      * repository. The homeId will be set to a String that identifies the other repository. The specific format
      * of repository identifiers is domain dependent. Where it is set by Open Metadata Repository Services it will

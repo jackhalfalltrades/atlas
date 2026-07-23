@@ -19,6 +19,7 @@ package org.apache.atlas.tasks;
 
 import com.google.common.annotations.VisibleForTesting;
 import org.apache.atlas.AtlasConfiguration;
+import org.apache.atlas.AtlasRunMode;
 import org.apache.atlas.annotation.GraphTransaction;
 import org.apache.atlas.exception.AtlasBaseException;
 import org.apache.atlas.model.tasks.AtlasTask;
@@ -35,6 +36,7 @@ import org.springframework.stereotype.Component;
 
 import javax.inject.Inject;
 
+import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Iterator;
@@ -51,6 +53,7 @@ public class TaskRegistry {
 
     private final AtlasGraph graph;
     private final long       inProgressStaleThresholdMs;
+    private final String     nodeId;
 
     @Inject
     public TaskRegistry(AtlasGraph graph) {
@@ -61,6 +64,7 @@ public class TaskRegistry {
     TaskRegistry(AtlasGraph graph, long inProgressStaleThresholdMs) {
         this.graph = graph;
         this.inProgressStaleThresholdMs = inProgressStaleThresholdMs;
+        this.nodeId = buildNodeId();
     }
 
     @GraphTransaction
@@ -170,6 +174,7 @@ public class TaskRegistry {
         // AsyncImport-style global serialization: allow claiming only when
         // there is no task already IN_PROGRESS.
         if (hasAnyTaskInProgress()) {
+            LOG.debug("TaskRegistry.tryClaimTask({}): node={} claim denied, global IN_PROGRESS task exists", taskGuid, nodeId);
             return false;
         }
 
@@ -177,6 +182,7 @@ public class TaskRegistry {
         // This prevents newer tasks from leapfrogging older tasks when multiple
         // nodes race to claim tasks at startup/runtime.
         if (!isOldestPendingTask(taskGuid)) {
+            LOG.debug("TaskRegistry.tryClaimTask({}): node={} claim denied, not oldest pending task", taskGuid, nodeId);
             return false;
         }
 
@@ -189,6 +195,7 @@ public class TaskRegistry {
 
         if (!results.hasNext()) {
             // Task not found or not PENDING — already claimed or completed by another node.
+            LOG.debug("TaskRegistry.tryClaimTask({}): node={} claim denied, task not PENDING/found", taskGuid, nodeId);
             return false;
         }
 
@@ -199,7 +206,7 @@ public class TaskRegistry {
         setEncodedProperty(taskVertex, Constants.TASK_START_TIME, now);
         setEncodedProperty(taskVertex, Constants.TASK_UPDATED_TIME, now);
 
-        LOG.debug("TaskRegistry.tryClaimTask({}): claimed IN_PROGRESS", taskGuid);
+        LOG.info("TaskRegistry.tryClaimTask({}): node={} claimed IN_PROGRESS", taskGuid, nodeId);
         return true;
     }
 
@@ -220,9 +227,22 @@ public class TaskRegistry {
 
             LOG.warn("TaskRegistry.recoverStaleInProgressTasks(): recovering stale IN_PROGRESS task {} back to PENDING",
                     taskGuid);
+            LOG.warn("TaskRegistry.recoverStaleInProgressTasks(): node={} recovered stale task {}", nodeId, taskGuid);
             setEncodedProperty(vertex, Constants.TASK_STATUS, AtlasTask.Status.PENDING.toString());
             setEncodedProperty(vertex, Constants.TASK_UPDATED_TIME, now);
         }
+    }
+
+    private String buildNodeId() {
+        String runMode  = AtlasRunMode.current().name();
+        String hostName = System.getenv("HOSTNAME");
+        String jvmId    = ManagementFactory.getRuntimeMXBean().getName();
+
+        if (hostName == null || hostName.trim().isEmpty()) {
+            hostName = "unknown-host";
+        }
+
+        return runMode + "@" + hostName + "#" + jvmId;
     }
 
     private boolean hasAnyTaskInProgress() {

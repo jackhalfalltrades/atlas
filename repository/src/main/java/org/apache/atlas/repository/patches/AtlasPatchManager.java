@@ -144,11 +144,11 @@ public class AtlasPatchManager {
 
         claimAction.recoverStaleClaims();
         if (!claimAction.tryClaim()) {
-            LOG.info("Skipping java handler: {}; claim not acquired", handler.getPatchId());
+            LOG.info("Skipping java handler: {}; node={}; claim not acquired", handler.getPatchId(), nodeId);
             return;
         }
 
-        LOG.info("Applying java handler: {}; status: {}", handler.getPatchId(), patchStatus);
+        LOG.info("Applying java handler: {}; node={}; status={}", handler.getPatchId(), nodeId, patchStatus);
 
         try {
             handler.apply();

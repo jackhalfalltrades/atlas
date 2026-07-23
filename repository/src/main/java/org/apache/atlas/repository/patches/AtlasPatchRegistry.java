@@ -166,6 +166,7 @@ public class AtlasPatchRegistry {
 
             PatchStatus status = getPatchStatus(patchVertex);
             if (status == APPLIED || status == SKIPPED) {
+                LOG.info("Patch claim skipped patchId={}, node={}, status={}", patchId, nodeId, status);
                 return false;
             }
 
@@ -176,6 +177,8 @@ public class AtlasPatchRegistry {
             boolean canClaim = status == FAILED || status == UNKNOWN || status == NOT_APPLIED
                     || (status == IN_PROGRESS && (recoverableInProgress || StringUtils.equals(claimedBy, nodeId)));
             if (!canClaim) {
+                LOG.debug("Patch claim denied patchId={}, node={}, status={}, claimedBy={}, claimedAt={}, reclaimBefore={}",
+                        patchId, nodeId, status, claimedBy, claimedAt, reclaimInProgressBeforeMs);
                 return false;
             }
 
@@ -186,6 +189,13 @@ public class AtlasPatchRegistry {
             setEncodedProperty(patchVertex, MODIFIED_BY_KEY, nodeId);
 
             patchNameStatusMap.put(patchId, IN_PROGRESS);
+            if (status == IN_PROGRESS && recoverableInProgress && StringUtils.isNotBlank(claimedBy)
+                    && !StringUtils.equals(claimedBy, nodeId)) {
+                LOG.warn("Patch claim recovered stale ownership patchId={}, previousOwner={}, previousClaimAt={}, newOwner={}",
+                        patchId, claimedBy, claimedAt, nodeId);
+            } else {
+                LOG.info("Patch claimed patchId={}, node={}, previousStatus={}", patchId, nodeId, status);
+            }
             return true;
         } finally {
             graph.commit();
