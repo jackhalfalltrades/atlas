@@ -217,7 +217,7 @@ public class AsyncImportTaskExecutor {
         LOG.info("==> registerRequest(importId={})", importId);
 
         try {
-            AtlasAsyncImportRequest existingImportRequest = importService.fetchImportRequestByImportId(importId);
+            AtlasAsyncImportRequest existingImportRequest = importService.resolveRequestStatus(importId);
 
             // handle new , successful and failed request from scratch
             if (existingImportRequest == null
