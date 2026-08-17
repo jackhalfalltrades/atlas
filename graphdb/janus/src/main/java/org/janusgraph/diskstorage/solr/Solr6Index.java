@@ -22,6 +22,7 @@ import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.impl.CloudSolrClient;
 import org.apache.solr.client.solrj.impl.HttpClientUtil;
 import org.apache.solr.client.solrj.impl.HttpSolrClient;
+import org.apache.solr.client.solrj.impl.Krb5HttpClientBuilder;
 import org.apache.solr.client.solrj.impl.LBHttpSolrClient;
 import org.apache.solr.common.params.ModifiableSolrParams;
 import org.janusgraph.diskstorage.BackendException;
@@ -47,6 +48,20 @@ public class Solr6Index extends SolrIndex {
 
     private static boolean    createSolrClientPerRequest;
     private static Solr6Index instance;
+
+    static {
+        // ATLAS-5362: OSS Solr6Index never configured SolrJ for Kerberos, so on a
+        // Kerberos+TLS cluster the index bootstrap (e.g. vertex_index) failed with HTTP 401
+        // from Solr. When a JAAS login config is present (i.e. Kerberos is in effect), register
+        // the Krb5 client builder globally BEFORE any SolrClient is created so SolrJ performs
+        // SPNego negotiation using the 'Client' JAAS entry (appname is configurable via
+        // -Dsolr.kerberos.jaas.appname, default 'Client').
+        if (System.getProperty("java.security.auth.login.config") != null) {
+            HttpClientUtil.setHttpClientBuilder(new Krb5HttpClientBuilder().getBuilder());
+
+            LOG.info("Solr6Index: registered Krb5HttpClientBuilder for SolrJ (java.security.auth.login.config is set)");
+        }
+    }
 
     private final Configuration config;
     private final Mode          solrMode;

@@ -122,7 +122,30 @@ public class SecureEmbeddedServer extends EmbeddedServer {
 
         List<Object> enabledCiphersList = config.getList(ATLAS_SSL_ENABLED_ALGORITHMS);
         if (enabledCiphersList != null && !enabledCiphersList.isEmpty()) {
-            sslContextFactory.setIncludeCipherSuites(enabledCiphersList.toArray(new String[enabledCiphersList.size()]));
+            // ATLAS-5362: legacy/CDH configs specify atlas.ssl.enabled.algorithms as a
+            // ':'-delimited list, but commons-configuration only splits on ','. Without this,
+            // the whole ':'-joined string is treated as a single (bogus) cipher name and the
+            // TLS listener starts with zero usable ciphers (handshake fails). Split each entry
+            // on both ':' and ',' so both delimiters are honored.
+            java.util.List<String> ciphers = new java.util.ArrayList<>();
+
+            for (Object entry : enabledCiphersList) {
+                if (entry == null) {
+                    continue;
+                }
+
+                for (String cipher : entry.toString().split("[,:]")) {
+                    String trimmed = cipher.trim();
+
+                    if (!trimmed.isEmpty()) {
+                        ciphers.add(trimmed);
+                    }
+                }
+            }
+
+            if (!ciphers.isEmpty()) {
+                sslContextFactory.setIncludeCipherSuites(ciphers.toArray(new String[0]));
+            }
         }
         String[] enabledProtocols = config.containsKey(ATLAS_SSL_ENABLED_PROTOCOLS) ?
                 config.getStringArray(ATLAS_SSL_ENABLED_PROTOCOLS) : ATLAS_SSL_DEFAULT_PROTOCOL;
